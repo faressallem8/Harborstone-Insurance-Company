@@ -1,6 +1,6 @@
 
 import os
-import sqlite3
+import pyodbc
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime
@@ -12,57 +12,50 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ConfigDict
 load_dotenv()
 
-BASE_DIR = Path(__file__).parent.parent  # Goes up one level from mcp_server/
-DB_PATH = BASE_DIR / os.getenv("DB_PATH", "db_test/harborstone.db")
 
+def get_connection_string() -> str:
+    """Build SQL Server connection string from environment variables"""
+    server = os.getenv("WIN_DB_SERVER", "localhost\\SQLEXPRESS")
+    database = os.getenv("WIN_DB_NAME", "HarborstoneInsurance")
+    driver = os.getenv("WIN_DB_DRIVER", "SQL Server")
+    auth_type = os.getenv("WIN_DB_AUTH_TYPE", "WINDOWS")
 
-def init_db():
-    if DB_PATH.exists():
-        print("Database already exists")
-        return
-
-    # Use absolute paths from BASE_DIR
-    schema_path = BASE_DIR / "db_test" / "schema.sqlite.sql"
-    seed_path = BASE_DIR / "db_test" / "seed.sqlite.sql"
-
-    print(f"Looking for schema at: {schema_path}")
-
-    if not schema_path.exists():
-        print(f"ERROR: Schema file does not exist at {schema_path}")
-        print(f"Current working directory: {Path.cwd()}")
-        print(f"BASE_DIR: {BASE_DIR}")
-        return
-
-    print("Initializing database...")
-
-    # Create directory if it doesn't exist
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(DB_PATH)
-
-    with open(schema_path, 'r') as f:
-        conn.executescript(f.read())
-
-    if seed_path.exists():
-        with open(seed_path, 'r') as f:
-            conn.executescript(f.read())
+    if auth_type.upper() == "WINDOWS":
+        return f"DRIVER={driver};SERVER={server};DATABASE={database};Trusted_Connection=yes;"
     else:
-        print(f"Warning: Seed file not found at {seed_path}")
-
-    conn.commit()
-    conn.close()
-    print("Database initialized successfully!")
+        username = os.getenv("WIN_DB_USERNAME", "")
+        password = os.getenv("WIN_DB_PASSWORD", "")
+        return f"DRIVER={driver};SERVER={server};DATABASE={database};UID={username};PWD={password};"
 
 
-# Database connection context manager
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    """Database connection context manager for SQL Server"""
+    conn_str = get_connection_string()
+    conn = pyodbc.connect(conn_str)
     try:
         yield conn
     finally:
         conn.close()
+
+
+def test_connection():
+    """Test database connection"""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT @@VERSION")
+            version = cursor.fetchone()
+            print(f"[OK] Connected to SQL Server: {version[0][:50]}...")
+
+            # Check if data exists
+            cursor.execute("SELECT COUNT(*) FROM Employees")
+            count = cursor.fetchone()[0]
+            print(f"[OK] Employees count: {count}")
+            return True
+    except Exception as e:
+        print(f"[ERROR] Failed to connect to SQL Server: {e}")
+        return False
 
 class LoginInput(BaseModel):
     """Login credentials"""
@@ -98,8 +91,8 @@ server = FastMCP("Harborstone Insurance Server")
 
 current_session = {}
 
-@server.resource("underwriting://guidlines")
-def get_guidlines() -> str:
+@server.resource("underwriting://guidelines")
+def get_guidelines() -> str:
     """Underwriting guidelines - read-only resource"""
     return """UNDERWRITING GUIDELINES - HARBORSTONE INSURANCE
 
@@ -394,8 +387,11 @@ async def file_claim(policy_id: int, amount: float, description: str, ctx: Conte
                 (policy_id, claim_number, claim_amount, description, status, assigned_employee_id)
                 VALUES (?, ?, ?, ?, 'Pending', ?)
             """, (policy_id, claim_number, amount, description, user_id))
-        claim_id = cursor.lastrowid
         conn.commit()
+
+        cursor.execute("SELECT SCOPE_IDENTITY()")
+        claim_id = cursor.fetchone()[0]
+
 
     await ctx.report_progress(100, 100, "Claim filed successfully!")
 
@@ -409,7 +405,7 @@ async def file_claim(policy_id: int, amount: float, description: str, ctx: Conte
 
 
 @server.tool
-async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str = "") -> str:    #THIS FUNCTION PROBABLY WON'T WORK PROPERLY CAUSE OF THE SESSION THING THAT I DID NOT MAKE YET
+async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str = "") -> str:
     """
     Approve or deny a claim.
     Requires Underwriter, Risk Analyst, or Admin role.
@@ -654,9 +650,20 @@ Recommendation: {"Proceed with caution - requires review" if risk_score == "High
 # Underwriter/Risk Analyst/Admin roles, firing notifications/tools/list_changed.
 server.disable(names={"approve_claim"}, components={"tool"})
 
-init_db()
-transport = os.getenv('TRANSPORT_TYPE' , "stdio")
-server.run(transport=transport)
+print("="*50)
+print("HARBORSTONE INSURANCE MCP SERVER")
+print("="*50)
+print()
 
+print("Testing database connection...")
+if not test_connection():
+    print("ERROR: Database connection failed. Exiting.")
+    exit(1)
+
+print()
+transport = os.getenv('TRANSPORT_TYPE', "stdio")
+print(f"[OK] Starting Harborstone Insurance Server with {transport} transport...")
+print()
+server.run(transport=transport)
 
 
