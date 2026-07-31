@@ -183,9 +183,31 @@ async def login(username: str, password: str, ctx: Context) -> str:
         if not user:
             return f"User {username} not found."
 
-    """This function is missing code related to handling the session and the notifications
-    so that specific tools appear for different roles but i am lacking the brain power right now to handle it"""
+    # ============================================================
+    # SESSION + NOTIFICATIONS: role determines which tools are visible.
+    # approve_claim is disabled globally by default (see server.disable(...)
+    # near the bottom of this file). Logging in as a privileged role
+    # enables it for THIS session only, which fires a session-scoped
+    # notifications/tools/list_changed the client can react to.
+    # Logging in as a non-privileged role explicitly re-disables it, so
+    # re-login as a different role on the same connection is handled too.
+    # ============================================================
+    privileged_roles = {"Underwriter", "Admin", "Risk Analyst"}
 
+    current_session = {
+        "user_id": user["employee_id"],
+        "username": user["username"],
+        "role": user["role_name"],
+        "full_name": user["full_name"],
+        "session_id": ctx.session_id,
+    }
+
+    if user["role_name"] in privileged_roles:
+        await ctx.enable_components(names={"approve_claim"}, components={"tool"})
+        tools_list = "check_claim_status, get_customer_info, get_policy_details, file_claim, assess_risk, approve_claim"
+    else:
+        await ctx.disable_components(names={"approve_claim"}, components={"tool"})
+        tools_list = "check_claim_status, get_customer_info, get_policy_details, file_claim, assess_risk"
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -200,13 +222,12 @@ async def login(username: str, password: str, ctx: Context) -> str:
 
     User: {user['full_name']} ({user['username']})
     Role: {user['role_name'].upper()}
-    Session: session_id[:20]...
+    Session: {ctx.session_id[:20]}...
 
     Available Tools:
-    tools_list
+    {tools_list}
 
     A tools/list_changed notification has been sent to your client."""
-
 
 @server.tool
 async def check_claim_status(claim_id: int) -> str:
@@ -627,6 +648,11 @@ AI Analysis:
 
 Recommendation: {"Proceed with caution - requires review" if risk_score == "High" else "Proceed with normal underwriting process"}"""
 
+
+# NOTIFICATIONS: approve_claim is a privileged write tool, so it stays hidden
+# for every connection by default. login() enables it per-session for
+# Underwriter/Risk Analyst/Admin roles, firing notifications/tools/list_changed.
+server.disable(names={"approve_claim"}, components={"tool"})
 
 init_db()
 transport = os.getenv('TRANSPORT_TYPE' , "stdio")
