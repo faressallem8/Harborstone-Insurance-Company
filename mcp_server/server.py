@@ -17,15 +17,28 @@ def get_connection_string() -> str:
     """Build SQL Server connection string from environment variables"""
     server = os.getenv("WIN_DB_SERVER", "localhost\\SQLEXPRESS")
     database = os.getenv("WIN_DB_NAME", "HarborstoneInsurance")
-    driver = os.getenv("WIN_DB_DRIVER", "SQL Server")
+    driver = os.getenv("WIN_DB_DRIVER", "ODBC Driver 18 for SQL Server")
     auth_type = os.getenv("WIN_DB_AUTH_TYPE", "WINDOWS")
 
     if auth_type.upper() == "WINDOWS":
-        return f"DRIVER={driver};SERVER={server};DATABASE={database};Trusted_Connection=yes;"
+        return (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            "Trusted_Connection=yes;"
+            "TrustServerCertificate=yes;"
+        )
     else:
         username = os.getenv("WIN_DB_USERNAME", "")
         password = os.getenv("WIN_DB_PASSWORD", "")
-        return f"DRIVER={driver};SERVER={server};DATABASE={database};UID={username};PWD={password};"
+        return (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            f"UID={username};"
+            f"PWD={password};"
+            "TrustServerCertificate=yes;"
+        )
 
 
 @contextmanager
@@ -59,7 +72,7 @@ def test_connection():
 
 class LoginInput(BaseModel):
     """Login credentials"""
-    username: str = Field( min_length=3, max_length=50, description="Username")
+    username: str= Field( min_length=3, max_length=50, description="Username")
     password: str = Field( min_length=1, description="Password")
     model_config = ConfigDict(extra="forbid")
 
@@ -173,9 +186,31 @@ async def login(username: str, password: str, ctx: Context) -> str:
         """, (username,))
         user = cursor.fetchone()
 
-        if not user:
-            return f"User {username} not found."
+        employee_id = user[0]
+        username_db = user[1]
+        role_name = user[2]
+        full_name = user[3]
 
+        current_session = {
+            "employee_id": employee_id,
+            "username": username_db,
+            "role": role_name,
+            "full_name": full_name,
+        }
+
+        # Notify the client that the available tools may have changed
+        try:
+            await ctx.session.send_tool_list_changed()
+        except Exception:
+            pass
+
+        return (
+            "LOGIN SUCCESSFUL\n"
+            f"Employee ID: {employee_id}\n"
+            f"Username: {username_db}\n"
+            f"Role: {role_name}\n"
+            f"Full Name: {full_name}"
+        )
     # ============================================================
     # SESSION + NOTIFICATIONS: role determines which tools are visible.
     # approve_claim is disabled globally by default (see server.disable(...)
@@ -188,14 +223,14 @@ async def login(username: str, password: str, ctx: Context) -> str:
     privileged_roles = {"Underwriter", "Admin", "Risk Analyst"}
 
     current_session = {
-        "user_id": user[0],
-        "username": user[1],
-        "role": user[2],
-        "full_name": user[3],
+        "user_id": user["employee_id"],
+        "username": user["username"],
+        "role": user["role_name"],
+        "full_name": user["full_name"],
         "session_id": ctx.session_id,
     }
 
-    if user[2] in privileged_roles:
+    if user["role_name"] in privileged_roles:
         await ctx.enable_components(names={"approve_claim"}, components={"tool"})
         tools_list = "check_claim_status, get_customer_info, get_policy_details, file_claim, assess_risk, approve_claim"
     else:
@@ -206,15 +241,15 @@ async def login(username: str, password: str, ctx: Context) -> str:
         cursor = conn.cursor()
         cursor.execute("""
         INSERT INTO AuditLogs (employee_id, action, table_name, record_id)
-        VALUES (?,'LOGIN','employee',?)
-        """,(user[0], user[0]))
+        VALUES (?,"LOGIN",'employee',?)
+        """,(user["employee_id"], user["employee_id"]))
 
         conn.commit()
 
     return f"""LOGIN SUCCESSFUL
 
-    User: {user[3]} ({user[1]})
-    Role: {user[2].upper()}
+    User: {user['full_name']} ({user['username']})
+    Role: {user['role_name'].upper()}
     Session: {ctx.session_id[:20]}...
 
     Available Tools:
@@ -257,17 +292,17 @@ async def check_claim_status(claim_id: int) -> str:
 
     return f"""CLAIM STATUS REPORT
 
-    Claim ID: {claim[0]}
-    Claim Number: {claim[1]}
-    Customer: {claim[9]}
-    Policy: {claim[8]}
-    Amount: ${claim[2]:,.2f}
-    Status: {claim[3]}
-    Priority: {claim[6]}
-    Risk Level: {claim[7]}
-    Description: {claim[4]}
-    Filed: {claim[5]}
-    Assigned To: {claim[10] or 'Unassigned'}"""
+    Claim ID: {claim['claim_id']}
+    Claim Number: {claim['claim_number']}
+    Customer: {claim['customer_name']}
+    Policy: {claim['policy_number']}
+    Amount: ${claim['claim_amount']:,.2f}
+    Status: {claim['status']}
+    Priority: {claim['priority']}
+    Risk Level: {claim['risk_level']}
+    Description: {claim['description']}
+    Filed: {claim['claim_date']}
+    Assigned To: {claim['assigned_to'] or 'Unassigned'}"""
 
 
 @server.tool
@@ -296,14 +331,14 @@ async def get_customer_info(customer_id: int) -> str:
 
     return f"""CUSTOMER INFORMATION
 
-    ID: {customer[0]}
-    Code: {customer[1]}
-    Name: {customer[2]}
-    Email: {customer[3]}
-    Phone: {customer[4]}
-    City: {customer[5]}
-    Country: {customer[6]}
-    Status: {customer[7]}"""
+    ID: {customer['customer_id']}
+    Code: {customer['customer_code']}
+    Name: {customer['full_name']}
+    Email: {customer['email']}
+    Phone: {customer['phone']}
+    City: {customer['city']}
+    Country: {customer['country']}
+    Status: {customer['status']}"""
 
 
 @server.tool
@@ -337,17 +372,17 @@ async def get_policy_details(policy_id: int) -> str:
 
     return f"""POLICY DETAILS
 
-    Policy ID: {policy[0]}
-    Policy Number: {policy[1]}
-    Customer: {policy[9]}
-    Vessel: {policy[10]}
-    Type: {policy[2] or 'N/A'}
-    Coverage: ${policy[3]:,.2f}
-    Deductible: ${policy[4]:,.2f}
-    Premium: ${policy[5]:,.2f}
-    Start Date: {policy[6]}
-    End Date: {policy[7]}
-    Status: {policy[8].upper()}"""
+    Policy ID: {policy['policy_id']}
+    Policy Number: {policy['policy_number']}
+    Customer: {policy['customer_name']}
+    Vessel: {policy['vessel_name']}
+    Type: {policy['policy_type'] or 'N/A'}
+    Coverage: ${policy['coverage_amount']:,.2f}
+    Deductible: ${policy['deductible']:,.2f}
+    Premium: ${policy['premium']:,.2f}
+    Start Date: {policy['start_date']}
+    End Date: {policy['end_date']}
+    Status: {policy['status'].upper()}"""
 
 
 @server.tool
@@ -441,10 +476,10 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
         if not claim:
             return "ERROR: Claim not found"
 
-        if claim[1] != "Pending":
+        if claim["status"] != "Pending":
             return f"ERROR: Claim already {claim['status']}"
 
-        amount = claim[0]
+        amount = claim["claim_amount"]
 
         await ctx.report_progress(40, 100, f"Claim amount: ${amount:,.2f}")
 
@@ -571,15 +606,15 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
         risk_score = "Low"
         current_year = datetime.now().year
 
-        if policy[2] > 250000:
+        if policy["coverage_amount"] > 250000:
             risk_score = "High"
             risk_factors.append("High coverage amount increases risk exposure")
-        elif policy[2] > 100000:
+        elif policy["coverage_amount"] > 100000:
             risk_score = "Medium"
             risk_factors.append("Moderate coverage amount")
 
-        if policy[6]:
-            vessel_type = policy[6]
+        if policy["vessel_type"]:
+            vessel_type = policy["vessel_type"]
             if "Fishing" in vessel_type:
                 risk_score = "Medium" if risk_score == "Low" else risk_score
                 risk_factors.append("Fishing vessels have higher operational risk")
@@ -587,8 +622,8 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
                 risk_score = "High"
                 risk_factors.append("Tankers have environmental liability risk")
 
-        if policy[7]:
-            vessel_age = current_year - policy[7]
+        if policy["year_built"]:
+            vessel_age = current_year - policy["year_built"]
             if vessel_age > 20:
                 risk_factors.append(f"Vessel is {vessel_age} years old - age factor")
             elif vessel_age > 10:
@@ -600,13 +635,13 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
         ai_analysis = await ctx.sample(
             prompt=f"""Analyze this marine insurance policy risk:
 
-            Policy Number: {policy[0]}
-            Type: {policy[1] or 'N/A'}
-            Coverage Amount: ${policy[2]:,.2f}
-            Customer: {policy[4]}
-            Vessel: {policy[5]} ({policy[6] or 'N/A'})
-            Year Built: {policy[7]}
-            Insured Value: ${policy[8]:,.2f}
+            Policy Number: {policy['policy_number']}
+            Type: {policy['policy_type'] or 'N/A'}
+            Coverage Amount: ${policy['coverage_amount']:,.2f}
+            Customer: {policy['customer_name']}
+            Vessel: {policy['vessel_name']} ({policy['vessel_type'] or 'N/A'})
+            Year Built: {policy['year_built']}
+            Insured Value: ${policy['insured_value']:,.2f}
             Risk Factors: {', '.join(risk_factors) if risk_factors else 'None identified'}
             
             Provide:
@@ -626,18 +661,18 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
 
         return f"""RISK ASSESSMENT REPORT - HARBORSTONE INSURANCE
 
-Policy: {policy[0]}
-Customer: {policy[4]}
-Vessel: {policy[5]}
+Policy: {policy['policy_number']}
+Customer: {policy['customer_name']}
+Vessel: {policy['vessel_name']}
 
 Overall Risk: {risk_score}
 
 Risk Factors:
 {chr(10).join(f'- {factor}' for factor in risk_factors) if risk_factors else '- None identified'}
 
-Coverage Amount: ${policy[2]:,.2f}
-Vessel Age: {current_year - policy[7] if policy['year_built'] else 'N/A'} years
-Policy Status: {policy[3].upper()}
+Coverage Amount: ${policy['coverage_amount']:,.2f}
+Vessel Age: {current_year - policy['year_built'] if policy['year_built'] else 'N/A'} years
+Policy Status: {policy['status'].upper()}
 
 AI Analysis:
 {ai_analysis}

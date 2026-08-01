@@ -412,25 +412,31 @@ class HarborstoneAgent:
     # ========================================================
 
     def gemini_function_declarations(self):
+    
+     declarations = []
 
-        declarations = []
+     for tool in self.tools.values():
 
-        for tool in self.tools.values():
+        schema = tool.inputSchema or {
+            "type": "object",
+            "properties": {},
+        }
 
-            schema = tool.inputSchema or {
-                "type": "object",
-                "properties": {},
-            }
+        # Gemini does not accept additionalProperties /
+        # additional_properties in the function parameter schema.
+        schema = dict(schema)
+        schema.pop("additionalProperties", None)
+        schema.pop("additional_properties", None)
 
-            declaration = types.FunctionDeclaration(
-                name=tool.name,
-                description=tool.description or "",
-                parameters=schema,
-            )
+        declaration = types.FunctionDeclaration(
+            name=tool.name,
+            description=tool.description or "",
+            parameters=schema,
+        )
 
-            declarations.append(declaration)
+        declarations.append(declaration)
 
-        return declarations
+     return declarations
 
     # ========================================================
     # TOOL RESULT -> TEXT
