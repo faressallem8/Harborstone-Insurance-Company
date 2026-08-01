@@ -1,4 +1,3 @@
-
 import os
 import pyodbc
 from pathlib import Path
@@ -10,6 +9,7 @@ from fastmcp import FastMCP, Context
 from dotenv import load_dotenv
 
 from pydantic import BaseModel, Field, ConfigDict
+
 load_dotenv()
 
 
@@ -52,6 +52,25 @@ def get_db():
         conn.close()
 
 
+def row_to_dict(cursor, row):
+    """
+    pyodbc.Row does NOT support string-key access (row['col']) -
+    only integer indexing (row[0]) and attribute access (row.col).
+    This converts a fetched row into a plain dict using cursor.description,
+    so the rest of the code can keep using row['col_name'] safely.
+    """
+    if row is None:
+        return None
+    columns = [col[0] for col in cursor.description]
+    return dict(zip(columns, row))
+
+
+def rows_to_dicts(cursor, rows):
+    """Same as row_to_dict, but for a list of rows (e.g. fetchall())."""
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in rows]
+
+
 def test_connection():
     """Test database connection"""
     try:
@@ -70,39 +89,46 @@ def test_connection():
         print(f"[ERROR] Failed to connect to SQL Server: {e}")
         return False
 
+
 class LoginInput(BaseModel):
     """Login credentials"""
-    username: str= Field( min_length=3, max_length=50, description="Username")
-    password: str = Field( min_length=1, description="Password")
+    username: str = Field(min_length=3, max_length=50, description="Username")
+    password: str = Field(min_length=1, description="Password")
     model_config = ConfigDict(extra="forbid")
+
 
 class FileClaimInput(BaseModel):
     """Input for filing a claim"""
-    policy_id: int = Field( ge=1, description="Policy ID")
-    amount: float = Field( gt=0, description="Claim amount in USD")
-    description: str = Field( min_length=10, max_length=500, description="Claim description")
+    policy_id: int = Field(ge=1, description="Policy ID")
+    amount: float = Field(gt=0, description="Claim amount in USD")
+    description: str = Field(min_length=10, max_length=500, description="Claim description")
     model_config = ConfigDict(extra="forbid")
+
 
 class ApproveClaimInput(BaseModel):
     """Input for approving a claim"""
-    claim_id: int = Field( ge=1, description="Claim ID")
-    decision: str = Field( pattern="^(approved|denied)$", description="Decision")
+    claim_id: int = Field(ge=1, description="Claim ID")
+    decision: str = Field(pattern="^(approved|denied)$", description="Decision")
     notes: Optional[str] = Field(None, max_length=500, description="Notes")
     model_config = ConfigDict(extra="forbid")
 
+
 class CheckClaimInput(BaseModel):
     """Input for checking claim status"""
-    claim_id: int = Field( ge=1, description="Claim ID")
+    claim_id: int = Field(ge=1, description="Claim ID")
     model_config = ConfigDict(extra="forbid")
+
 
 class AssessRiskInput(BaseModel):
     """Input for risk assessment"""
-    policy_id: int = Field( ge=1, description="Policy ID")
+    policy_id: int = Field(ge=1, description="Policy ID")
     model_config = ConfigDict(extra="forbid")
+
 
 server = FastMCP("Harborstone Insurance Server")
 
 current_session = {}
+
 
 @server.resource("underwriting://guidelines")
 def get_guidelines() -> str:
@@ -131,6 +157,7 @@ def get_guidelines() -> str:
     - All decisions must be logged
     """
 
+
 @server.resource("compliance://policy")
 def get_policy() -> str:
     """Compliance policy - read-only resource"""
@@ -152,6 +179,7 @@ def get_policy() -> str:
     - Staff training required
     """
 
+
 @server.prompt
 def draft_denial_letter(claim_id: int, reason: str) -> str:
     """Template for claim denial letters"""
@@ -171,46 +199,14 @@ Requirements:
 The letter should be ready for a manager's signature.
 """
 
+
 @server.tool
 async def login(username: str, password: str, ctx: Context) -> str:
     """Authenticate user and create session
     Triggers tools/list_changed notification based on role"""
 
     global current_session
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-        SELECT employee_id, username, role_name, full_name
-        FROM employees
-        WHERE username = ? AND is_active = 1
-        """, (username,))
-        user = cursor.fetchone()
 
-        employee_id = user[0]
-        username_db = user[1]
-        role_name = user[2]
-        full_name = user[3]
-
-        current_session = {
-            "employee_id": employee_id,
-            "username": username_db,
-            "role": role_name,
-            "full_name": full_name,
-        }
-
-        # Notify the client that the available tools may have changed
-        try:
-            await ctx.session.send_tool_list_changed()
-        except Exception:
-            pass
-
-        return (
-            "LOGIN SUCCESSFUL\n"
-            f"Employee ID: {employee_id}\n"
-            f"Username: {username_db}\n"
-            f"Role: {role_name}\n"
-            f"Full Name: {full_name}"
-        )
     # ============================================================
     # SESSION + NOTIFICATIONS: role determines which tools are visible.
     # approve_claim is disabled globally by default (see server.disable(...)
@@ -219,31 +215,45 @@ async def login(username: str, password: str, ctx: Context) -> str:
     # notifications/tools/list_changed the client can react to.
     # Logging in as a non-privileged role explicitly re-disables it, so
     # re-login as a different role on the same connection is handled too.
+    #
+    # NOTE: this does not yet verify `password` - the employees table
+    # as queried below has no password column. Add a password_hash
+    # column + verification (e.g. bcrypt) before relying on this for
+    # real authentication.
     # ============================================================
     privileged_roles = {"Underwriter", "Admin", "Risk Analyst"}
-
-    current_session = {
-        "user_id": user["employee_id"],
-        "username": user["username"],
-        "role": user["role_name"],
-        "full_name": user["full_name"],
-        "session_id": ctx.session_id,
-    }
-
-    if user["role_name"] in privileged_roles:
-        await ctx.enable_components(names={"approve_claim"}, components={"tool"})
-        tools_list = "check_claim_status, get_customer_info, get_policy_details, file_claim, assess_risk, approve_claim"
-    else:
-        await ctx.disable_components(names={"approve_claim"}, components={"tool"})
-        tools_list = "check_claim_status, get_customer_info, get_policy_details, file_claim, assess_risk"
 
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-        INSERT INTO AuditLogs (employee_id, action, table_name, record_id)
-        VALUES (?,"LOGIN",'employee',?)
-        """,(user["employee_id"], user["employee_id"]))
+        SELECT employee_id, username, role_name, full_name
+        FROM employees
+        WHERE username = ? AND is_active = 1
+        """, (username,))
+        user = row_to_dict(cursor, cursor.fetchone())
 
+        if not user:
+            return "ERROR: Invalid username or inactive account"
+
+        current_session = {
+            "user_id": user["employee_id"],
+            "username": user["username"],
+            "role": user["role_name"],
+            "full_name": user["full_name"],
+            "session_id": ctx.session_id,
+        }
+
+        if user["role_name"] in privileged_roles:
+            await ctx.enable_components(names={"approve_claim"}, components={"tool"})
+            tools_list = "check_claim_status, get_customer_info, get_policy_details, file_claim, assess_risk, approve_claim"
+        else:
+            await ctx.disable_components(names={"approve_claim"}, components={"tool"})
+            tools_list = "check_claim_status, get_customer_info, get_policy_details, file_claim, assess_risk"
+
+        cursor.execute("""
+        INSERT INTO AuditLogs (employee_id, action, table_name, record_id)
+        VALUES (?, 'LOGIN', 'employee', ?)
+        """, (user["employee_id"], user["employee_id"]))
         conn.commit()
 
     return f"""LOGIN SUCCESSFUL
@@ -256,6 +266,7 @@ async def login(username: str, password: str, ctx: Context) -> str:
     {tools_list}
 
     A tools/list_changed notification has been sent to your client."""
+
 
 @server.tool
 async def check_claim_status(claim_id: int) -> str:
@@ -285,10 +296,10 @@ async def check_claim_status(claim_id: int) -> str:
                 LEFT JOIN Employees e ON c.assigned_employee_id = e.employee_id
                 WHERE c.claim_id = ?
             """, (claim_id,))
-        claim = cursor.fetchone()
+        claim = row_to_dict(cursor, cursor.fetchone())
 
         if not claim:
-           return "ERROR: Claim not found"
+            return "ERROR: Claim not found"
 
     return f"""CLAIM STATUS REPORT
 
@@ -324,10 +335,10 @@ async def get_customer_info(customer_id: int) -> str:
                 FROM Customers 
                 WHERE customer_id = ?
             """, (customer_id,))
-        customer = cursor.fetchone()
+        customer = row_to_dict(cursor, cursor.fetchone())
 
         if not customer:
-          return "ERROR: Customer not found"
+            return "ERROR: Customer not found"
 
     return f"""CUSTOMER INFORMATION
 
@@ -365,7 +376,7 @@ async def get_policy_details(policy_id: int) -> str:
                 JOIN Vessels v ON p.vessel_id = v.vessel_id
                 WHERE p.policy_id = ?
             """, (policy_id,))
-        policy = cursor.fetchone()
+        policy = row_to_dict(cursor, cursor.fetchone())
 
         if not policy:
             return "ERROR: Policy not found"
@@ -386,47 +397,49 @@ async def get_policy_details(policy_id: int) -> str:
 
 
 @server.tool
-async def file_claim(policy_id: int, amount: float, description: str, ctx: Context) -> str:
+async def file_claim(policy_id: int, amount: float, description: str, ctx: Context, incident_date: str = "") -> str:
     """
     File a new claim.
-    Anyone can file a claim (read-only access).
+    Anyone can file a claim.
+
+    incident_date: when the loss/damage occurred, format YYYY-MM-DD.
+    If not provided, defaults to today's date.
     """
     global current_session
 
-
-        # ============================================================
-        # PROGRESS TRACKING: Shows progress to the user
-        # ============================================================
+    # ============================================================
+    # PROGRESS TRACKING: Shows progress to the user
+    # ============================================================
     await ctx.report_progress(0, 100, "Starting claim filing...")
 
-        # Validate policy exists
+    # Validate policy exists
     with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT policy_id FROM InsurancePolicies WHERE policy_id = ?", (policy_id,))
-            if not cursor.fetchone():
-                return "ERROR: Policy not found"
+        cursor = conn.cursor()
+        cursor.execute("SELECT policy_id FROM InsurancePolicies WHERE policy_id = ?", (policy_id,))
+        if not cursor.fetchone():
+            return "ERROR: Policy not found"
 
     await ctx.report_progress(30, 100, "Generating claim number...")
 
-        # Generate claim number
+    # Generate claim number
     claim_number = f"CLM-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
     await ctx.report_progress(60, 100, "Creating claim record...")
 
     user_id = current_session.get("user_id") if current_session else None
+    incident_date_value = incident_date.strip() or datetime.now().strftime("%Y-%m-%d")
 
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
                 INSERT INTO Claims 
-                (policy_id, claim_number, claim_amount, description, status, assigned_employee_id)
-                VALUES (?, ?, ?, ?, 'Pending', ?)
-            """, (policy_id, claim_number, amount, description, user_id))
+                (policy_id, claim_number, claim_amount, description, status, assigned_employee_id, incident_date)
+                VALUES (?, ?, ?, ?, 'Pending', ?, ?)
+            """, (policy_id, claim_number, amount, description, user_id, incident_date_value))
         conn.commit()
 
         cursor.execute("SELECT SCOPE_IDENTITY()")
         claim_id = cursor.fetchone()[0]
-
 
     await ctx.report_progress(100, 100, "Claim filed successfully!")
 
@@ -448,9 +461,7 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
     """
     global current_session
 
-
     await ctx.report_progress(0, 100, "Starting claim approval...")
-
 
     if not current_session:
         return "ERROR: Please login first"
@@ -471,7 +482,7 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
                 FROM Claims 
                 WHERE claim_id = ?
             """, (claim_id,))
-        claim = cursor.fetchone()
+        claim = row_to_dict(cursor, cursor.fetchone())
 
         if not claim:
             return "ERROR: Claim not found"
@@ -502,7 +513,7 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
                 Amount: ${amount:,.2f}
                 Decision: {decision}
                 Notes: {notes or 'None provided'}
-                
+
                 This claim exceeds the $10,000 automatic approval limit.
                 Please confirm this decision.""",
                 schema={
@@ -594,7 +605,7 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
                 JOIN Vessels v ON p.vessel_id = v.vessel_id
                 WHERE p.policy_id = ?
             """, (policy_id,))
-        policy = cursor.fetchone()
+        policy = row_to_dict(cursor, cursor.fetchone())
 
         if not policy:
             return "ERROR: Policy not found"
@@ -631,9 +642,8 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
 
         await ctx.report_progress(60, 100, "Requesting AI analysis...")
 
-
         ai_analysis = await ctx.sample(
-            prompt=f"""Analyze this marine insurance policy risk:
+            messages=f"""Analyze this marine insurance policy risk:
 
             Policy Number: {policy['policy_number']}
             Type: {policy['policy_type'] or 'N/A'}
@@ -643,17 +653,15 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
             Year Built: {policy['year_built']}
             Insured Value: ${policy['insured_value']:,.2f}
             Risk Factors: {', '.join(risk_factors) if risk_factors else 'None identified'}
-            
+
             Provide:
             1. Overall risk level (Low/Medium/High)
             2. Key risk factors
             3. Recommendations for underwriting
             4. Any red flags to investigate
-            
+
             Keep it concise and professional."""
-                        )
-
-
+        )
 
         await ctx.report_progress(80, 100, "Generating report...")
 
@@ -675,7 +683,7 @@ Vessel Age: {current_year - policy['year_built'] if policy['year_built'] else 'N
 Policy Status: {policy['status'].upper()}
 
 AI Analysis:
-{ai_analysis}
+{ai_analysis.text if hasattr(ai_analysis, "text") else ai_analysis}
 
 Recommendation: {"Proceed with caution - requires review" if risk_score == "High" else "Proceed with normal underwriting process"}"""
 
@@ -685,9 +693,9 @@ Recommendation: {"Proceed with caution - requires review" if risk_score == "High
 # Underwriter/Risk Analyst/Admin roles, firing notifications/tools/list_changed.
 server.disable(names={"approve_claim"}, components={"tool"})
 
-print("="*50)
+print("=" * 50)
 print("HARBORSTONE INSURANCE MCP SERVER")
-print("="*50)
+print("=" * 50)
 print()
 
 print("Testing database connection...")
@@ -700,5 +708,3 @@ transport = os.getenv('TRANSPORT_TYPE', "stdio")
 print(f"[OK] Starting Harborstone Insurance Server with {transport} transport...")
 print()
 server.run(transport=transport)
-
-
