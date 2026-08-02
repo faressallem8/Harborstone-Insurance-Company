@@ -113,6 +113,12 @@ class ApproveClaimInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ClaimApprovalConfirmation(BaseModel):
+    """Schema for the human confirmation requested via ctx.elicit() for high-value claims"""
+    confirm: str = Field(description="Do you confirm this decision? Answer 'yes' or 'no'")
+    reasoning: str = Field(description="Please explain your reasoning")
+
+
 class CheckClaimInput(BaseModel):
     """Input for checking claim status"""
     claim_id: int = Field(ge=1, description="Claim ID")
@@ -507,8 +513,9 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
             await ctx.report_progress(50, 100, "High-value claim - requesting human approval...")
 
             response = await ctx.elicit(
-                title="High-Value Claim Approval Required",
-                prompt=f"""**Claim #{claim_id}** requires your approval.
+                message=f"""High-Value Claim Approval Required
+
+                Claim #{claim_id} requires your approval.
 
                 Amount: ${amount:,.2f}
                 Decision: {decision}
@@ -516,28 +523,21 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
 
                 This claim exceeds the $10,000 automatic approval limit.
                 Please confirm this decision.""",
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "confirm": {
-                            "type": "string",
-                            "enum": ["yes", "no"],
-                            "description": "Do you confirm this decision?"
-                        },
-                        "reasoning": {
-                            "type": "string",
-                            "description": "Please explain your reasoning"
-                        }
-                    },
-                    "required": ["confirm", "reasoning"],
-                    "additionalProperties": False
-                }
+                response_type=ClaimApprovalConfirmation,
             )
 
-            if response.get("confirm") != "yes":
-                return f"Claim {decision} cancelled by human.\n\nReason: {response.get('reasoning', 'No reason provided')}"
+            if response.action == "decline":
+                return f"Claim {decision} declined by human reviewer."
+            if response.action == "cancel":
+                return f"Claim {decision} cancelled by human reviewer."
+            if response.action != "accept":
+                return f"ERROR: Unexpected elicitation response: {response.action}"
 
-            reasoning = response.get("reasoning", "")
+            confirmation = response.data
+            if confirmation.confirm.strip().lower() != "yes":
+                return f"Claim {decision} cancelled by human.\n\nReason: {confirmation.reasoning or 'No reason provided'}"
+
+            reasoning = confirmation.reasoning
             await ctx.report_progress(70, 100, f"Human confirmed: {reasoning[:50]}...")
         else:
             await ctx.report_progress(60, 100, "Claim under $10,000 - auto-approved")

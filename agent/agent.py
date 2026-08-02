@@ -1,4 +1,3 @@
-
 """
 Harborstone Insurance - MCP Agent
 
@@ -9,7 +8,7 @@ This agent:
 4. Discovers tools, resources, and prompts.
 5. Logs in through the MCP server.
 6. Detects tools/list_changed notifications.
-7. Uses Gemini to decide which MCP tool to call.
+7. Uses Groq (OpenAI-compatible chat completions) to decide which MCP tool to call.
 8. Handles MCP elicitation requests for human confirmation.
 9. Handles MCP sampling requests from assess_risk().
 10. Provides an interactive terminal chat.
@@ -28,8 +27,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from google import genai
-from google.genai import types
+from groq import Groq
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -46,22 +44,24 @@ SERVER_FILE = PROJECT_ROOT / "mcp_server" / "server.py"
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # You can change this model if needed.
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+# llama-3.3-70b-versatile has solid tool-calling support and a
+# generous free-tier quota. openai/gpt-oss-120b is another good option.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 
-if not GEMINI_API_KEY:
+if not GROQ_API_KEY:
     raise RuntimeError(
-        "GEMINI_API_KEY is missing.\n"
+        "GROQ_API_KEY is missing.\n"
         "Put it in the .env file:\n\n"
-        "GEMINI_API_KEY=your_key_here"
+        "GROQ_API_KEY=your_key_here"
     )
 
 
-# Gemini client
-gemini = genai.Client(api_key=GEMINI_API_KEY)
+# Groq client (OpenAI-compatible)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 
 # ============================================================
@@ -102,7 +102,7 @@ class HarborstoneAgent:
                 ↓
             Agent
                 ↓
-            Gemini
+            Groq
                 ↓
             Agent response
                 ↓
@@ -115,7 +115,8 @@ class HarborstoneAgent:
         print("=" * 70)
 
         try:
-            prompt_parts = []
+            # Convert MCP sampling messages into OpenAI-style chat messages.
+            chat_messages = []
 
             for message in params.messages:
                 content = message.content
@@ -127,27 +128,29 @@ class HarborstoneAgent:
                 else:
                     text = str(content)
 
-                prompt_parts.append(
-                    f"[{message.role}]\n{text}"
+                # MCP roles are "user"/"assistant"; Groq expects the same.
+                role = message.role if message.role in ("user", "assistant") else "user"
+
+                chat_messages.append({"role": role, "content": text})
+
+            if params.systemPrompt:
+                chat_messages.insert(
+                    0, {"role": "system", "content": params.systemPrompt}
                 )
 
-            prompt = "\n\n".join(prompt_parts)
-
-            print("Server requested Gemini analysis...")
+            print("Server requested Groq analysis...")
             print("-" * 70)
 
             response = await asyncio.to_thread(
-                gemini.models.generate_content,
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=params.maxTokens or 1024
-                ),
+                groq_client.chat.completions.create,
+                model=GROQ_MODEL,
+                messages=chat_messages,
+                max_tokens=params.maxTokens or 1024,
             )
 
-            text = response.text or ""
+            text = response.choices[0].message.content or ""
 
-            print("Gemini sampling response:")
+            print("Groq sampling response:")
             print(text)
             print("=" * 70)
 
@@ -160,7 +163,7 @@ class HarborstoneAgent:
                     type="text",
                     text=text,
                 ),
-                model=GEMINI_MODEL,
+                model=GROQ_MODEL,
                 stopReason="endTurn",
             )
 
@@ -408,35 +411,45 @@ class HarborstoneAgent:
         print("=" * 70)
 
     # ========================================================
-    # MCP TOOL -> GEMINI FUNCTION DECLARATION
+    # MCP TOOL -> GROQ (OPENAI-STYLE) TOOL DEFINITION
     # ========================================================
 
-    def gemini_function_declarations(self):
-    
-     declarations = []
+    def groq_tool_definitions(self):
+        """
+        Convert MCP tool definitions into the OpenAI-compatible
+        "tools" format Groq expects:
 
-     for tool in self.tools.values():
+            {
+                "type": "function",
+                "function": {
+                    "name": ...,
+                    "description": ...,
+                    "parameters": <JSON schema>,
+                },
+            }
+        """
 
-        schema = tool.inputSchema or {
-            "type": "object",
-            "properties": {},
-        }
+        definitions = []
 
-        # Gemini does not accept additionalProperties /
-        # additional_properties in the function parameter schema.
-        schema = dict(schema)
-        schema.pop("additionalProperties", None)
-        schema.pop("additional_properties", None)
+        for tool in self.tools.values():
 
-        declaration = types.FunctionDeclaration(
-            name=tool.name,
-            description=tool.description or "",
-            parameters=schema,
-        )
+            schema = tool.inputSchema or {
+                "type": "object",
+                "properties": {},
+            }
 
-        declarations.append(declaration)
+            definitions.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "parameters": schema,
+                    },
+                }
+            )
 
-     return declarations
+        return definitions
 
     # ========================================================
     # TOOL RESULT -> TEXT
@@ -585,10 +598,10 @@ class HarborstoneAgent:
             print("\n❌ Login failed.")
 
     # ========================================================
-    # GEMINI AGENT LOOP
+    # GROQ AGENT LOOP
     # ========================================================
 
-    async def ask_gemini(self, user_message: str):
+    async def ask_llm(self, user_message: str):
 
         if not self.session:
             raise RuntimeError(
@@ -602,11 +615,9 @@ class HarborstoneAgent:
                 "Use the login command."
             )
 
-        function_declarations = (
-            self.gemini_function_declarations()
-        )
+        tool_definitions = self.groq_tool_definitions()
 
-        if not function_declarations:
+        if not tool_definitions:
 
             return (
                 "No MCP tools are currently "
@@ -634,26 +645,10 @@ IMPORTANT RULES:
 Available MCP resources and prompts should be used when appropriate.
 """
 
-        contents = [
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_text(
-                        text=user_message
-                    )
-                ],
-            )
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_message},
         ]
-
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            tools=[
-                types.Tool(
-                    function_declarations=
-                    function_declarations
-                )
-            ],
-        )
 
         # ----------------------------------------------------
         # AGENT TOOL-CALL LOOP
@@ -662,61 +657,69 @@ Available MCP resources and prompts should be used when appropriate.
         for _ in range(10):
 
             response = await asyncio.to_thread(
-                gemini.models.generate_content,
-                model=GEMINI_MODEL,
-                contents=contents,
-                config=config,
+                groq_client.chat.completions.create,
+                model=GROQ_MODEL,
+                messages=messages,
+                tools=tool_definitions,
+                tool_choice="auto",
             )
 
-            candidate = (
-                response.candidates[0]
-                if response.candidates
-                else None
-            )
+            choice = response.choices[0] if response.choices else None
 
-            if not candidate:
+            if not choice:
 
                 return (
-                    "Gemini did not return a response."
+                    "Groq did not return a response."
                 )
 
-            model_content = candidate.content
+            message = choice.message
 
-            contents.append(model_content)
-
-            function_calls = []
-
-            for part in model_content.parts:
-
-                if getattr(part, "function_call", None):
-
-                    function_calls.append(
-                        part.function_call
-                    )
+            tool_calls = message.tool_calls or []
 
             # ------------------------------------------------
             # NO TOOL CALL
             # ------------------------------------------------
 
-            if not function_calls:
+            if not tool_calls:
 
-                return response.text or (
-                    "Gemini returned an empty response."
+                return message.content or (
+                    "Groq returned an empty response."
                 )
+
+            # ------------------------------------------------
+            # RECORD THE ASSISTANT'S TOOL-CALL REQUEST
+            # ------------------------------------------------
+
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": tool_call.id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_call.function.name,
+                                "arguments": tool_call.function.arguments,
+                            },
+                        }
+                        for tool_call in tool_calls
+                    ],
+                }
+            )
 
             # ------------------------------------------------
             # EXECUTE MCP TOOL CALLS
             # ------------------------------------------------
 
-            function_response_parts = []
+            for tool_call in tool_calls:
 
-            for function_call in function_calls:
+                tool_name = tool_call.function.name
 
-                tool_name = function_call.name
-
-                arguments = dict(
-                    function_call.args or {}
-                )
+                try:
+                    arguments = json.loads(tool_call.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    arguments = {}
 
                 try:
 
@@ -732,21 +735,13 @@ Available MCP resources and prompts should be used when appropriate.
                         f"{tool_name}: {exc}"
                     )
 
-                function_response_parts.append(
-                    types.Part.from_function_response(
-                        name=tool_name,
-                        response={
-                            "result": result
-                        },
-                    )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": result,
+                    }
                 )
-
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=function_response_parts,
-                )
-            )
 
         return (
             "The agent reached its maximum "
@@ -985,7 +980,7 @@ Examples:
 
             try:
 
-                answer = await self.ask_gemini(
+                answer = await self.ask_llm(
                     user_input
                 )
 
