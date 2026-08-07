@@ -5,6 +5,10 @@ from groq import Groq
 
 from memory.schema import Message
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 COMPACT_PROMPT = """
 Summarize the conversation below.
