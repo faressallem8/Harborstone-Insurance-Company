@@ -1,0 +1,12 @@
+chromadb
+fastmcp
+groq
+langchain-text-splitters
+mcp
+numpy
+pyodbc
+pydantic
+pytest
+python-dotenv
+rank-bm25
+sentence-transformers

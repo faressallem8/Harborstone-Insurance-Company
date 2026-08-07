@@ -25,46 +25,74 @@ class ContextEvaluator:
 
     def evaluate(
         self,
-        messages: List[Message],
-        expected_phrase: str,
-    ) -> List[EvaluationMetrics]:
+        test_cases,
+    ):
 
-        results: List[EvaluationMetrics] = []
-
-        # Tokens before pruning
-        original_tokens = calculate_token_count(messages)
+        results = []
 
         for strategy in self.strategies:
 
-            # Run the strategy and measure latency
-            pruned_messages, latency = measure_latency(
-                lambda: strategy.prune(messages)
-            )
+            total_accuracy = 0.0
+            total_latency = 0.0
+            total_tokens = 0
+            total_original_tokens = 0
+            
 
-            # Tokens after pruning
-            remaining_tokens = calculate_token_count(
-                pruned_messages
-            )
+            for messages, expected_phrase in test_cases:
 
-            tokens_removed = (
-                original_tokens - remaining_tokens
-            )
+                original_tokens = calculate_token_count(messages)
+                total_original_tokens += original_tokens
 
-            # Check if important information survived
-            accuracy = calculate_accuracy(
-                pruned_messages,
-                expected_phrase,
+                pruned_messages, latency = measure_latency(
+                    lambda: strategy.prune(messages)
+                )
+
+                remaining_tokens = calculate_token_count(
+                    pruned_messages
+                )
+
+                accuracy = calculate_accuracy(
+                    pruned_messages,
+                    expected_phrase,
+                )
+
+                total_accuracy += accuracy
+                total_latency += latency
+                total_tokens += remaining_tokens
+
+            case_count = len(test_cases)
+
+            average_original_tokens = (
+                total_original_tokens // case_count
+            )
+            
+            average_remaining_tokens = (
+                total_tokens // case_count
+            )
+            
+            average_tokens_removed = (
+                average_original_tokens
+                - average_remaining_tokens
             )
 
             results.append(
+
                 EvaluationMetrics(
+                                
                     strategy_name=str(strategy),
-                    original_tokens=original_tokens,
-                    remaining_tokens=remaining_tokens,
-                    tokens_removed=tokens_removed,
-                    message_count=len(pruned_messages),
-                    latency=latency,
-                    accuracy=accuracy,
+                
+                    original_tokens=average_original_tokens,
+                
+                    remaining_tokens=average_remaining_tokens,
+                
+                    tokens_removed=average_tokens_removed,
+                
+                    message_count=case_count,
+                
+                    latency=total_latency / case_count,
+                
+                    accuracy=total_accuracy / case_count,
+                
                 )
             )
 
