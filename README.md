@@ -110,9 +110,17 @@ Harborstone-Insurance-Company/
 │   ├── semantic_memory.py
 │   ├── episodic_memory.py
 │   ├── consolidation.py
+│   ├── promote_or_drop.py
 │   ├── scratchpad.py
 │   ├── token_counter.py
 │   ├── schema.py
+│   ├── tests/
+│   │   ├── test_short_term.py
+│   │   ├── test_episodic.py
+│   │   ├── test_semantic.py
+│   │   ├── test_consolidation.py
+│   │   ├── test_promote_or_drop.py
+│   │   └── test_scratchpad.py
 │   └── ...
 ├── RAG/
 │   ├── __init__.py
@@ -306,6 +314,105 @@ DEFAULT_TOP_K = 5
 RETRIEVAL_CANDIDATE_K = 10
 FUSION_FINAL_K = 5
 ```
+
+---
+
+## Memory System
+
+The agent includes a layered memory system designed to preserve useful conversation information while keeping the active context manageable.
+
+### Memory Architecture
+
+The memory module is organized into multiple layers:
+
+| Component | Purpose |
+|---|---|
+| **Short-Term Memory** | Keeps the active conversation messages and recent context. |
+| **Scratchpad** | Stores temporary working information used during the current reasoning process. |
+| **Episodic Memory** | Stores important conversation events and large messages that may be useful later. |
+| **Semantic Memory** | Stores durable facts extracted from conversation summaries. |
+| **Consolidation Layer** | Routes short-term messages to the appropriate long-term memory layer. |
+| **Promotion Strategy** | Decides whether a message should be kept, promoted to episodic memory, promoted to semantic memory, or dropped. |
+
+### Memory Flow
+
+```text
+User / Agent Message
+        │
+        ▼
+Short-Term Memory
+        │
+        ▼
+Promotion Strategy
+        │
+        ├── KEEP ───────────────► Short-Term Memory
+        │
+        ├── EPISODIC ───────────► Episodic Memory
+        │
+        ├── SEMANTIC ────────────► Semantic Memory
+        │
+        └── DROP ────────────────► Discarded
+                    
+        Consolidation Layer
+        │
+        └── Semantic expiration / cleanup
+```
+
+### Promotion Rules
+
+The default promotion strategy applies the following rules:
+
+- **Summary messages** are promoted to Semantic Memory.
+- **System messages** remain in Short-Term Memory.
+- **Large messages** above the configured token threshold are promoted to Episodic Memory.
+- **All other messages** remain in Short-Term Memory.
+
+Semantic facts use a `fact_key` to identify and update individual facts. When a fact is updated, the previous version is preserved in the version history before the latest value becomes active.
+
+### Semantic Memory
+
+Semantic Memory provides long-term factual storage with:
+
+- Fact insertion and retrieval by `fact_key`.
+- Fact updates and conflict handling.
+- Version history for previous values.
+- Expiration of facts using their `expires_at` timestamp.
+
+### Episodic Memory
+
+Episodic Memory stores important conversation events as complete `Message` objects. It supports:
+
+- Adding individual messages.
+- Extending the memory with multiple messages.
+- Retrieving all stored episodes.
+- Retrieving an episode by message ID.
+- Removing individual episodes.
+- Clearing the memory.
+
+### Consolidation
+
+The `ConsolidationEngine` periodically processes Short-Term Memory and applies the promotion strategy to each message. Promoted messages are moved into Episodic or Semantic Memory, while retained messages stay in Short-Term Memory.
+
+Before storing a message in Semantic Memory, the consolidation layer checks for a valid `fact_key`. Semantic Memory also performs expiration cleanup during consolidation.
+
+### Memory Tests
+
+The memory implementation is covered by unit tests for:
+
+- Short-Term Memory message management, snapshots, rollback, and scratchpad operations.
+- Episodic Memory insertion and removal.
+- Semantic Memory insertion and expiration.
+- Promotion and routing decisions.
+- Consolidation between memory layers.
+- Scratchpad operations and snapshots.
+
+Run the complete memory test suite with:
+
+```bash
+python -m pytest memory/tests -v
+```
+
+A successful run should report all memory tests as passed.
 
 ---
 
