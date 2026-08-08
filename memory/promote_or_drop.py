@@ -1,13 +1,10 @@
-from abc import ABC, abstractmethod
 from enum import Enum
-import logging
+from abc import ABC, abstractmethod
 
-from memory.schema import Message, MessageType, RoleEnum
-
-logger = logging.getLogger("Harborstone.Memory")
+from memory.schema import Message, MessageType
 
 
-class MemoryAction(str, Enum):
+class MemoryAction(Enum):
     KEEP = "keep"
     EPISODIC = "episodic"
     SEMANTIC = "semantic"
@@ -15,6 +12,7 @@ class MemoryAction(str, Enum):
 
 
 class BasePromotionStrategy(ABC):
+
     @abstractmethod
     def decide(self, message: Message) -> MemoryAction:
         pass
@@ -22,41 +20,53 @@ class BasePromotionStrategy(ABC):
 
 class DefaultPromotionStrategy(BasePromotionStrategy):
     """
-    Default routing policy.
+    Decide where a Short-Term Memory message should go.
 
-    Rules:
-    - SUMMARY -> Semantic Memory
-    - SYSTEM -> Keep
-    - Large messages -> Episodic Memory
-    - Everything else -> Keep
+    Priority:
+
+    1. Explicit personal fact -> Semantic Memory
+    2. Summary -> Semantic Memory
+    3. Large message -> Episodic Memory
+    4. Normal message -> Keep in Short-Term Memory
     """
+
+    LARGE_MESSAGE_THRESHOLD = 700
 
     def decide(self, message: Message) -> MemoryAction:
 
-        if message.msg_type == MessageType.SUMMARY:
-            logger.info(
-                f"[PROMOTE] seq={message.sequence} -> SEMANTIC | "
-                "Reason=Summary message"
-            )
+        # ====================================================
+        # 1. EXPLICIT SEMANTIC FACT
+        # ====================================================
+
+        fact_key = (
+            message.metadata.get("fact_key")
+            if message.metadata
+            else None
+        )
+
+        if fact_key:
             return MemoryAction.SEMANTIC
 
-        if message.role == RoleEnum.SYSTEM:
-            logger.info(
-                f"[KEEP] seq={message.sequence} | "
-                "Reason=System message"
-            )
-            return MemoryAction.KEEP
+        # ====================================================
+        # 2. SUMMARY
+        # ====================================================
 
-        if message.token_count > 150:
-            logger.info(
-                f"[PROMOTE] seq={message.sequence} -> EPISODIC | "
-                f"Reason=Large message ({message.token_count} tokens)"
-            )
-            return MemoryAction.EPISODIC
+        if message.msg_type == MessageType.SUMMARY:
+            return MemoryAction.SEMANTIC
 
-        logger.info(
-            f"[KEEP] seq={message.sequence} | "
-            "Reason=Default policy"
-        )
+        # ====================================================
+        # 3. LARGE MESSAGE
+        # ====================================================
+
+        content = message.content or ""
+
+        if isinstance(content, str):
+
+            if len(content) >= self.LARGE_MESSAGE_THRESHOLD:
+                return MemoryAction.EPISODIC
+
+        # ====================================================
+        # 4. NORMAL CHAT
+        # ====================================================
 
         return MemoryAction.KEEP
