@@ -52,6 +52,7 @@ from memory.short_term import ShortTermMemory
 from memory.episodic_memory import EpisodicMemory
 from memory.semantic_memory import SemanticMemory
 from memory.consolidation import ConsolidationEngine
+from context_eval.recursive_summarization import RecursiveSummarizationStrategy
 
 from memory.schema import (
     MessageType,
@@ -152,6 +153,10 @@ class HarborstoneAgent:
             short_term=self.short_term_memory,
             episodic=self.episodic_memory,
             semantic=self.semantic_memory,
+        )
+
+        self.context_strategy = RecursiveSummarizationStrategy(
+            keep_recent_messages=6
         )
 
         print("\n")
@@ -348,6 +353,13 @@ class HarborstoneAgent:
 
         if short_term_messages:
 
+            # Apply the selected context strategy
+            short_term_messages = (
+                self.context_strategy.prune(
+                    short_term_messages
+                )
+            )
+                    
             lines = []
 
             for message in short_term_messages[-10:]:
