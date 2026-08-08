@@ -17,7 +17,7 @@ from memory.exceptions import (
     MemoryValidationError,
     MemoryRollbackError,
 )
-from config import settings
+from memory.config import settings
 
 logger = logging.getLogger("Harborstone.Memory")
 
