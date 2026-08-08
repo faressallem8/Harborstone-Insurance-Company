@@ -1,4 +1,3 @@
-# RAG/__init__.py
 from RAG.vector_store import HarborstoneVectorStore
 from RAG.retriever import NaiveRAG, HybridRAG, AgenticRAG
 from RAG.self_rag import SelfRAGVerifier

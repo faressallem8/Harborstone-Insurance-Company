@@ -12,6 +12,7 @@ This agent:
 8. Handles MCP elicitation requests for human confirmation.
 9. Handles MCP sampling requests from assess_risk().
 10. Provides an interactive terminal chat.
+11. Uses RAG (Retrieval-Augmented Generation) for knowledge/document questions.
 
 Run from the project root:
 
@@ -22,6 +23,7 @@ import asyncio
 import json
 import os
 import sys
+import re
 from pathlib import Path
 from typing import Any
 
@@ -33,9 +35,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+from RAG import get_retriever, SelfRAGVerifier
+from RAG.config import DEFAULT_RETRIEVER
+
+
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -86,6 +90,56 @@ class HarborstoneAgent:
         self.username: str | None = None
         self.role: str | None = None
 
+
+        try:
+            self.rag = get_retriever(DEFAULT_RETRIEVER)
+            self.verifier = SelfRAGVerifier()
+            # Show how many chunks are in the vector store
+            chunk_count = len(self.rag.vector_store.collection.get()["ids"])
+            print(f"RAG initialized with '{DEFAULT_RETRIEVER}' retriever")
+            print(f"Vector store contains {chunk_count} chunks")
+        except Exception as e:
+            print(f"RAG initialization failed: {e}")
+            print("The agent will fall back to tool-based mode only.")
+            self.rag = None
+            self.verifier = None
+        print("=" * 70 + "\n")
+
+    # ============================================================
+    # KNOWLEDGE DETECTION
+    # ============================================================
+
+    def _is_knowledge_question(self, query: str) -> bool:
+        """
+        Detect if a query is a knowledge/document question vs a database query.
+
+        Returns:
+            True if this should be handled by RAG, False if it should go to MCP tools.
+        """
+        # Quick check: if it's a command, skip
+        if query.lower() in {"tools", "resources", "prompts", "login", "help", "exit", "quit"}:
+            return False
+
+        # Keywords that suggest a knowledge/document question
+        knowledge_keywords = [
+            "policy", "rule", "guideline", "manual", "section",
+            "what", "how", "why", "is", "does", "can",
+            "underwriting", "compliance", "regulation", "standard",
+            "protocol", "procedure", "requirement", "eligibility",
+            "deductible", "coverage", "premium", "claim", "risk",
+            "fishing", "vessel", "cardiac", "engine", "inspection"
+        ]
+
+        # Check for citation patterns like "Section 4.2b", "4.2b", "2.2"
+        citation_pattern = r"(?:section|sec\.?)\s*[\d\.]+[a-z]?|[\d]+\.[\d]+[a-z]?"
+
+        query_lower = query.lower()
+
+        return (
+            any(kw in query_lower for kw in knowledge_keywords) or
+            bool(re.search(citation_pattern, query_lower, re.IGNORECASE))
+        )
+
     # ========================================================
     # MCP CALLBACK: SAMPLING
     # ========================================================
@@ -111,7 +165,7 @@ class HarborstoneAgent:
 
         print("\n")
         print("=" * 70)
-        print("🤖 MCP SAMPLING REQUEST")
+        print("MCP SAMPLING REQUEST")
         print("=" * 70)
 
         try:
@@ -199,7 +253,7 @@ class HarborstoneAgent:
 
         print("\n")
         print("=" * 70)
-        print("⚠️  HUMAN APPROVAL REQUIRED")
+        print("HUMAN APPROVAL REQUIRED")
         print("=" * 70)
 
         print(params.message)
@@ -272,7 +326,7 @@ class HarborstoneAgent:
 
         print("\n")
         print("=" * 70)
-        print("🔔 TOOLS/LIST_CHANGED")
+        print("TOOLS/LIST_CHANGED")
         print("=" * 70)
         print("The server changed the available tools.")
         print("New tool list:")
@@ -513,7 +567,7 @@ class HarborstoneAgent:
 
         print("\n")
         print("=" * 70)
-        print(f"🔧 MCP TOOL CALL: {name}")
+        print(f"MCP TOOL CALL: {name}")
         print("=" * 70)
 
         print(
@@ -585,7 +639,7 @@ class HarborstoneAgent:
 
                     break
 
-            print("\n✅ Login successful.")
+            print("\nLogin successful.")
 
             # This is important:
             # the server changes available tools after login.
@@ -595,34 +649,69 @@ class HarborstoneAgent:
 
         else:
 
-            print("\n❌ Login failed.")
+            print("\nLogin failed.")
 
     # ========================================================
-    # GROQ AGENT LOOP
+    # GROQ AGENT LOOP (WITH RAG)
     # ========================================================
 
     async def ask_llm(self, user_message: str):
-
         if not self.session:
-            raise RuntimeError(
-                "MCP session is not connected."
-            )
+            raise RuntimeError("MCP session is not connected.")
 
         if not self.logged_in:
+            return "Please login first. Use the login command."
 
-            return (
-                "Please login first. "
-                "Use the login command."
-            )
 
+        if self.rag and self.verifier and self._is_knowledge_question(user_message):
+            print("\n" + "=" * 70)
+            print("RAG KNOWLEDGE QUERY DETECTED")
+            print("=" * 70)
+            print(f"Query: {user_message}")
+            print("-" * 70)
+
+            try:
+                # Get RAG answer
+                rag_result = self.rag.answer(user_message)
+
+                # Self-RAG verification
+                verification = self.verifier.verify(
+                    user_message,
+                    rag_result["answer"],
+                    rag_result["sources"]
+                )
+
+                print(f"Verification passed: {verification['passed']}")
+                print(f"   {verification['reason']}")
+
+                if verification["passed"]:
+                    # Format the answer with a source citation
+                    answer = rag_result["answer"]
+
+                    # Add source info
+                    if rag_result.get("sources") and len(rag_result["sources"]) > 0:
+                        source = rag_result["sources"][0]
+                        source_info = source.get("metadata", {}).get("source", "policy manual")
+                        answer += f"\n\n*Source: {source_info}*"
+
+                    print("=" * 70)
+                    return answer
+                else:
+                    print("Verification failed - falling back to tool-based approach")
+                    print("=" * 70)
+
+            except Exception as e:
+                print(f"RAG error: {e}")
+                print("Falling back to tool-based approach")
+                print("=" * 70)
+
+        # ============================================================
+        # TOOL-BASED LLM LOOP (Original)
+        # ============================================================
         tool_definitions = self.groq_tool_definitions()
 
         if not tool_definitions:
-
-            return (
-                "No MCP tools are currently "
-                "available."
-            )
+            return "No MCP tools are currently available."
 
         system_instruction = """
 You are the Harborstone Insurance Agent.
@@ -650,12 +739,8 @@ Available MCP resources and prompts should be used when appropriate.
             {"role": "user", "content": user_message},
         ]
 
-        # ----------------------------------------------------
         # AGENT TOOL-CALL LOOP
-        # ----------------------------------------------------
-
         for _ in range(10):
-
             response = await asyncio.to_thread(
                 groq_client.chat.completions.create,
                 model=GROQ_MODEL,
@@ -667,29 +752,17 @@ Available MCP resources and prompts should be used when appropriate.
             choice = response.choices[0] if response.choices else None
 
             if not choice:
-
-                return (
-                    "Groq did not return a response."
-                )
+                return "Groq did not return a response."
 
             message = choice.message
 
             tool_calls = message.tool_calls or []
 
-            # ------------------------------------------------
             # NO TOOL CALL
-            # ------------------------------------------------
-
             if not tool_calls:
+                return message.content or "Groq returned an empty response."
 
-                return message.content or (
-                    "Groq returned an empty response."
-                )
-
-            # ------------------------------------------------
             # RECORD THE ASSISTANT'S TOOL-CALL REQUEST
-            # ------------------------------------------------
-
             messages.append(
                 {
                     "role": "assistant",
@@ -708,12 +781,8 @@ Available MCP resources and prompts should be used when appropriate.
                 }
             )
 
-            # ------------------------------------------------
             # EXECUTE MCP TOOL CALLS
-            # ------------------------------------------------
-
             for tool_call in tool_calls:
-
                 tool_name = tool_call.function.name
 
                 try:
@@ -722,18 +791,12 @@ Available MCP resources and prompts should be used when appropriate.
                     arguments = {}
 
                 try:
-
                     result = await self.call_mcp_tool(
                         tool_name,
                         arguments,
                     )
-
                 except Exception as exc:
-
-                    result = (
-                        f"ERROR calling MCP tool "
-                        f"{tool_name}: {exc}"
-                    )
+                    result = f"ERROR calling MCP tool {tool_name}: {exc}"
 
                 messages.append(
                     {
@@ -743,10 +806,7 @@ Available MCP resources and prompts should be used when appropriate.
                     }
                 )
 
-        return (
-            "The agent reached its maximum "
-            "tool-call depth."
-        )
+        return "The agent reached its maximum tool-call depth."
 
     # ========================================================
     # RESOURCE READER
@@ -821,7 +881,7 @@ Available MCP resources and prompts should be used when appropriate.
 
         print("\n")
         print("=" * 70)
-        print("🏢 HARBORSTONE INSURANCE AI AGENT")
+        print("HARBORSTONE INSURANCE AI AGENT")
         print("=" * 70)
 
         print(
@@ -844,9 +904,6 @@ Available MCP resources and prompts should be used when appropriate.
             if not user_input:
                 continue
 
-            # ----------------------------------------------
-            # EXIT
-            # ----------------------------------------------
 
             if user_input.lower() in {
                 "exit",
@@ -855,10 +912,6 @@ Available MCP resources and prompts should be used when appropriate.
 
                 print("Goodbye.")
                 break
-
-            # ----------------------------------------------
-            # HELP
-            # ----------------------------------------------
 
             if user_input.lower() == "help":
 
@@ -903,9 +956,6 @@ Examples:
 
                 continue
 
-            # ----------------------------------------------
-            # TOOLS
-            # ----------------------------------------------
 
             if user_input.lower() == "tools":
 
@@ -920,9 +970,7 @@ Examples:
 
                 continue
 
-            # ----------------------------------------------
-            # RESOURCES
-            # ----------------------------------------------
+
 
             if user_input.lower() == "resources":
 
@@ -934,9 +982,7 @@ Examples:
 
                 continue
 
-            # ----------------------------------------------
-            # PROMPTS
-            # ----------------------------------------------
+
 
             if user_input.lower() == "prompts":
 
@@ -948,9 +994,7 @@ Examples:
 
                 continue
 
-            # ----------------------------------------------
-            # RESOURCE
-            # ----------------------------------------------
+
 
             if user_input.lower().startswith(
                 "resource "
@@ -964,9 +1008,7 @@ Examples:
 
                 continue
 
-            # ----------------------------------------------
-            # LOGIN
-            # ----------------------------------------------
+
 
             if user_input.lower() == "login":
 
@@ -974,9 +1016,7 @@ Examples:
 
                 continue
 
-            # ----------------------------------------------
-            # NORMAL AGENT QUERY
-            # ----------------------------------------------
+
 
             try:
 
@@ -990,12 +1030,10 @@ Examples:
             except Exception as exc:
 
                 print(
-                    f"\n❌ Agent error: {exc}"
+                    f"\nAgent error: {exc}"
                 )
 
-    # ========================================================
-    # CONNECT
-    # ========================================================
+
 
     async def run(self):
 
@@ -1056,7 +1094,7 @@ Examples:
 
                 print("\n")
                 print("=" * 70)
-                print("✅ MCP INITIALIZE COMPLETE")
+                print("MCP INITIALIZE COMPLETE")
                 print("=" * 70)
 
                 print(
