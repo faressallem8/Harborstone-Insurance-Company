@@ -2,6 +2,7 @@
 Harborstone Insurance - MCP Agent
 
 This agent:
+
 1. Starts the Harborstone MCP server over stdio.
 2. Performs the MCP initialize handshake.
 3. Checks server capabilities.
@@ -14,12 +15,8 @@ This agent:
 10. Provides an interactive terminal chat.
 11. Uses RAG (Retrieval-Augmented Generation) for knowledge/document questions.
 12. Uses Short-Term, Episodic, Semantic and Consolidation Memory.
-
-Run from the project root:
-
-    python agent/agent.py
 """
-
+from memory.self_rag import MemorySelfRAGVerifier
 import asyncio
 import json
 import os
@@ -29,7 +26,6 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-
 from groq import Groq
 
 from mcp import ClientSession, StdioServerParameters
@@ -52,11 +48,41 @@ from memory.short_term import ShortTermMemory
 from memory.episodic_memory import EpisodicMemory
 from memory.semantic_memory import SemanticMemory
 from memory.consolidation import ConsolidationEngine
-from context_eval.recursive_summarization import RecursiveSummarizationStrategy
 
 from memory.schema import (
     MessageType,
     RoleEnum,
+)
+
+
+# ============================================================
+# PATHS
+# ============================================================
+def _safe_content_to_str(content: Any) -> str:
+    """
+    Convert message content to string safely.
+    Handles lists, dicts, and other types.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        return json.dumps(content, default=str)
+    if isinstance(content, dict):
+        return json.dumps(content, default=str)
+    return str(content)
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+MANUAL_PATH = (
+    BASE_DIR
+    / "data"
+    / "harborstone_manual.txt"
+)
+
+SERVER_PATH = (
+    BASE_DIR
+    / "mcp_server"
+    / "server.py"
 )
 
 
@@ -66,11 +92,20 @@ from memory.schema import (
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-SERVER_FILE = PROJECT_ROOT / "mcp_server" / "server.py"
+SERVER_FILE = (
+    PROJECT_ROOT
+    / "mcp_server"
+    / "server.py"
+)
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(
+    PROJECT_ROOT / ".env"
+)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+GROQ_API_KEY = os.getenv(
+    "GROQ_API_KEY"
+)
 
 GROQ_MODEL = os.getenv(
     "GROQ_MODEL",
@@ -79,6 +114,7 @@ GROQ_MODEL = os.getenv(
 
 
 if not GROQ_API_KEY:
+
     raise RuntimeError(
         "GROQ_API_KEY is missing.\n"
         "Put it in the .env file:\n\n"
@@ -118,6 +154,50 @@ class HarborstoneAgent:
         Episodic / Semantic Memory
     """
 
+    def _extract_fact_key(self, text: str) -> str | None:
+        """
+        Detect simple user facts that should be stored in
+        Semantic Memory.
+        """
+        text = text.strip()
+
+        patterns = {
+            "favorite_vessel": [
+                r"my favorite vessel is (.+)",
+                r"my favourite vessel is (.+)",
+            ],
+            "favorite_club": [
+                r"my favorite club is (.+)",
+                r"my favourite club is (.+)",
+            ],
+            "favorite_team": [
+                r"my favorite team is (.+)",
+                r"my favourite team is (.+)",
+            ],
+            "favorite_player": [
+                r"my favorite player is (.+)",
+                r"my favourite player is (.+)",
+            ],
+            "favorite_color": [
+                r"my favorite color is (.+)",
+                r"my favourite color is (.+)",
+            ],
+        }
+
+        for fact_key, regexes in patterns.items():
+            for pattern in regexes:
+                match = re.match(
+                    pattern,
+                    text,
+                    re.IGNORECASE
+                )
+                if match:
+                    value = match.group(1).strip()
+                    if value:
+                        return fact_key
+
+        return None
+
     def __init__(self):
 
         # ====================================================
@@ -138,16 +218,26 @@ class HarborstoneAgent:
 
 
         # ====================================================
-        # MEMORY
+        # MEMORY SYSTEM & PERSISTENCE
         # ====================================================
+
+        # Path for persistence
+        data_dir = BASE_DIR / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
 
         self.short_term_memory = ShortTermMemory(
             conversation_id="harborstone_agent"
         )
 
-        self.episodic_memory = EpisodicMemory()
+        self.episodic_memory = EpisodicMemory(
+            persistence_file=data_dir / "episodic_memory.json"
+        )
 
-        self.semantic_memory = SemanticMemory()
+        self.semantic_memory = SemanticMemory(
+            persistence_file=data_dir / "semantic_memory.json"
+        )
+
+        self.memory_verifier = MemorySelfRAGVerifier()
 
         self.consolidation_engine = ConsolidationEngine(
             short_term=self.short_term_memory,
@@ -155,18 +245,16 @@ class HarborstoneAgent:
             semantic=self.semantic_memory,
         )
 
-        self.context_strategy = RecursiveSummarizationStrategy(
-            keep_recent_messages=6
-        )
 
         print("\n")
         print("=" * 70)
-        print("MEMORY INITIALIZED")
+        print("MEMORY INITIALIZED WITH PERSISTENCE & SELF-RAG")
         print("=" * 70)
         print("Short-Term Memory: READY")
-        print("Episodic Memory: READY")
-        print("Semantic Memory: READY")
-        print("Consolidation Engine: READY")
+        print("Episodic Memory:   READY (Persistence Enabled)")
+        print("Semantic Memory:   READY (Persistence Enabled)")
+        print("Memory Verifier:   READY (Self-RAG Enabled)")
+        print("Consolidation:     READY")
         print("=" * 70)
 
 
@@ -226,24 +314,56 @@ class HarborstoneAgent:
         """
         Store a message in Short-Term Memory.
 
-        The ConsolidationEngine is responsible for deciding
-        whether the message should later remain in STM,
-        move to Episodic Memory, or move to Semantic Memory.
+        If the user explicitly states a personal fact,
+        attach a fact_key so the consolidation engine can
+        promote it to Semantic Memory.
         """
 
         try:
 
+            metadata = {}
+
+            # ------------------------------------------------
+            # Detect semantic fact
+            # ------------------------------------------------
+
+            if role == RoleEnum.USER and isinstance(content, str):
+
+                fact_key = self._extract_fact_key(content)
+
+                if fact_key:
+
+                    metadata["fact_key"] = fact_key
+
+                    print(
+                        f"[MEMORY] Detected semantic fact: "
+                        f"{fact_key}"
+                    )
+
+            # ------------------------------------------------
+            # Store message
+            # ------------------------------------------------
+
             message = self.short_term_memory.add_message(
+
                 role=role,
+
                 content=content,
+
                 msg_type=msg_type,
+
+                metadata=metadata,
             )
 
             print(
                 f"[MEMORY] Stored "
                 f"{role.value} message "
-                f"(seq={message.sequence})"
+                f"(seq={message.sequence if message else 'N/A'})"
             )
+
+            # ------------------------------------------------
+            # Consolidation
+            # ------------------------------------------------
 
             self._maybe_consolidate()
 
@@ -257,12 +377,23 @@ class HarborstoneAgent:
 
             return None
 
-
+    def _is_memory_query(self, text: str) -> bool:
+        """
+        Check if the user prompt is asking about stored memory or facts.
+        """
+        text_lower = text.lower()
+        memory_keywords = [
+            "my favorite", "my favourite", "what is my", "who is my",
+            "do you know my", "remember", "what did i say", "my club",
+            "my name", "my age", "my person", "my job"
+        ]
+        return any(keyword in text_lower for keyword in memory_keywords)
     # ========================================================
     # MEMORY: CONSOLIDATION
     # ========================================================
 
     def _maybe_consolidate(self):
+
         """
         Consolidate only when Short-Term Memory is getting full.
 
@@ -324,149 +455,235 @@ class HarborstoneAgent:
             )
 
 
-    # ========================================================
+        # ========================================================
     # MEMORY: BUILD CONTEXT
     # ========================================================
 
     def _get_memory_context(self) -> str:
         """
         Build a compact context from the available memory layers.
-
-        Priority:
-
-        1. Short-Term Memory
-        2. Semantic Memory
-        3. Episodic Memory
-        4. Scratchpad
         """
-
         sections = []
-
 
         # ----------------------------------------------------
         # SHORT-TERM MEMORY
         # ----------------------------------------------------
-
-        short_term_messages = (
-            self.short_term_memory.get_messages()
-        )
-
+        short_term_messages = self.short_term_memory.get_messages()
         if short_term_messages:
-
-            # Apply the selected context strategy
-            short_term_messages = (
-                self.context_strategy.prune(
-                    short_term_messages
-                )
-            )
-                    
             lines = []
-
             for message in short_term_messages[-10:]:
-
-                role = (
-                    message.role.value
-                    if hasattr(message.role, "value")
-                    else str(message.role)
-                )
-
-                lines.append(
-                    f"{role}: {message.content}"
-                )
-
-            sections.append(
-                "SHORT-TERM MEMORY:\n"
-                + "\n".join(lines)
-            )
-
+                role = message.role.value if hasattr(message.role, "value") else str(message.role)
+                content_str = _safe_content_to_str(message.content)
+                lines.append(f"{role}: {content_str}")
+            sections.append("SHORT-TERM MEMORY:\n" + "\n".join(lines))
 
         # ----------------------------------------------------
         # SEMANTIC MEMORY
         # ----------------------------------------------------
-
-        semantic_messages = (
-            self.semantic_memory.get_all()
-        )
-
+        semantic_messages = self.semantic_memory.get_all()
         if semantic_messages:
-
             lines = []
-
             for message in semantic_messages[-10:]:
-
-                fact_key = (
-                    message.metadata.get(
-                        "fact_key",
-                        "unknown"
-                    )
-                )
-
-                lines.append(
-                    f"{fact_key}: {message.content}"
-                )
-
-            sections.append(
-                "SEMANTIC MEMORY:\n"
-                + "\n".join(lines)
-            )
-
+                fact_key = message.metadata.get("fact_key", "unknown")
+                content_str = _safe_content_to_str(message.content)
+                lines.append(f"{fact_key}: {content_str}")
+            sections.append("SEMANTIC MEMORY:\n" + "\n".join(lines))
 
         # ----------------------------------------------------
         # EPISODIC MEMORY
         # ----------------------------------------------------
-
-        episodic_messages = (
-            self.episodic_memory.get_all()
-        )
-
+        episodic_messages = self.episodic_memory.get_all()
         if episodic_messages:
-
             lines = []
-
             for message in episodic_messages[-10:]:
-
-                role = (
-                    message.role.value
-                    if hasattr(message.role, "value")
-                    else str(message.role)
-                )
-
-                lines.append(
-                    f"{role}: {message.content}"
-                )
-
-            sections.append(
-                "EPISODIC MEMORY:\n"
-                + "\n".join(lines)
-            )
-
+                role = message.role.value if hasattr(message.role, "value") else str(message.role)
+                content_str = _safe_content_to_str(message.content)
+                lines.append(f"{role}: {content_str}")
+            sections.append("EPISODIC MEMORY:\n" + "\n".join(lines))
 
         # ----------------------------------------------------
         # SCRATCHPAD
         # ----------------------------------------------------
-
-        scratchpad = (
-            self.short_term_memory.get_scratchpad()
-        )
-
+        scratchpad = self.short_term_memory.get_scratchpad()
         if scratchpad:
-
-            sections.append(
-                "SCRATCHPAD:\n"
-                + json.dumps(
-                    scratchpad,
-                    indent=2,
-                    default=str
-                )
-            )
-
+            sections.append("SCRATCHPAD:\n" + json.dumps(scratchpad, indent=2, default=str))
 
         if not sections:
-
             return "No previous memory available."
 
-
         return "\n\n".join(sections)
+
+    # ========================================================
+    # MEMORY: DETECTION
+    # ========================================================
+
+    def _is_memory_question(
+        self,
+        query: str
+    ) -> bool:
+
+        """
+        Detect questions that should primarily be answered
+        from user memory rather than RAG or MCP tools.
+
+        Examples:
+
+            What is my favorite vessel?
+            What is my favorite ship?
+            What did I tell you about my vessel?
+            Do you remember my favorite vessel?
+        """
+
+        query_lower = query.lower().strip()
+
+        memory_keywords = [
+
+            "my favorite",
+            "my favourite",
+
+            "what is my",
+            "what's my",
+            "what was my",
+
+            "do you remember",
+            "did i tell you",
+
+            "what did i tell you",
+            "remember my",
+
+            "my preference",
+            "my preferences",
+
+            "i told you",
+            "i said",
+
+            "what did i say",
+        ]
+
+        return any(
+            keyword in query_lower
+            for keyword in memory_keywords
+        )
+
+
+    # ========================================================
+    # MEMORY: CHECK RELEVANT FACT
+    # ========================================================
+
+    def _memory_contains_relevant_fact(
+        self,
+        query: str
+    ) -> bool:
+
+        """
+        Check whether the current memory context contains
+        information relevant to the user's question.
+
+        This does NOT change _get_memory_context().
+        """
+
+        memory_context = (
+            self._get_memory_context()
+        )
+
+        if not memory_context:
+
+            return False
+
+
+        query_lower = query.lower()
+
+
+        # Extract meaningful words.
+        words = re.findall(
+            r"\b[a-zA-Z]{3,}\b",
+            query_lower
+        )
+
+
+        ignored_words = {
+            "what",
+            "what's",
+            "what_is",
+            "was",
+            "were",
+            "are",
+            "is",
+            "the",
+            "my",
+            "your",
+            "favorite",
+            "favourite",
+            "did",
+            "tell",
+            "remember",
+            "about",
+            "does",
+            "do",
+            "you",
+            "know",
+            "said",
+        }
+
+
+        meaningful_words = [
+
+            word
+
+            for word in words
+
+            if word not in ignored_words
+        ]
+
+
+        memory_lower = (
+            memory_context.lower()
+        )
+
+
+        # Direct overlap.
+        if meaningful_words:
+
+            matches = sum(
+
+                1
+
+                for word in meaningful_words
+
+                if word in memory_lower
+            )
+
+            if matches > 0:
+
+                return True
+
+
+        # ----------------------------------------------------
+        # Special handling for preference questions
+        # ----------------------------------------------------
+
+        if (
+            "favorite" in query_lower
+            or
+            "favourite" in query_lower
+            or
+            "do you remember" in query_lower
+            or
+            "my preference" in query_lower
+        ):
+
+            if (
+                "favorite" in memory_lower
+                or
+                "favourite" in memory_lower
+                or
+                "preference" in memory_lower
+            ):
+
+                return True
+
+
+        return False
 
 
     # ========================================================
@@ -580,17 +797,22 @@ class HarborstoneAgent:
 
             chat_messages = []
 
+
             for message in params.messages:
 
                 content = message.content
 
+
                 if hasattr(content, "text"):
+
                     text = content.text
 
                 elif isinstance(content, str):
+
                     text = content
 
                 else:
+
                     text = str(content)
 
 
@@ -796,6 +1018,7 @@ class HarborstoneAgent:
     async def refresh_tools(self):
 
         if not self.session:
+
             return
 
 
@@ -1258,30 +1481,19 @@ class HarborstoneAgent:
     # GROQ AGENT LOOP WITH RAG + MEMORY
     # ========================================================
 
-    async def ask_llm(
-        self,
-        user_message: str
-    ):
-
+    async def ask_llm(self, user_message: str):
+        # ====================================================
+        # VALIDATION CHECKS
+        # ====================================================
         if not self.session:
-
-            raise RuntimeError(
-                "MCP session is not connected."
-            )
-
+            raise RuntimeError("MCP session is not connected.")
 
         if not self.logged_in:
-
-            return (
-                "Please login first. "
-                "Use the login command."
-            )
-
+            return "Please login first. Use the login command."
 
         # ====================================================
         # STORE USER MESSAGE
         # ====================================================
-
         self._store_memory_message(
             role=RoleEnum.USER,
             content=user_message,
@@ -1290,12 +1502,137 @@ class HarborstoneAgent:
 
 
         # ====================================================
+        # STORE USER MESSAGE (اول حاجة)
+        # ====================================================
+        self._store_memory_message(
+            role=RoleEnum.USER,
+            content=user_message,
+            msg_type=MessageType.CHAT,
+        )
+
+        # ====================================================
         # MEMORY CONTEXT
         # ====================================================
+        memory_context = self._get_memory_context()
 
-        memory_context = (
-            self._get_memory_context()
-        )
+        # ====================================================
+        # MEMORY-FIRST ROUTING
+        # ====================================================
+        is_memory_question = self._is_memory_question(user_message)
+        memory_has_answer = self._memory_contains_relevant_fact(user_message)
+
+        # Self-RAG verification for memory
+        if is_memory_question and memory_has_answer:
+            verification = self.memory_verifier.verify(user_message, memory_context)
+            if not verification["passed"]:
+                print(f"[MEMORY SELF-RAG] Rejected: {verification['reason']}")
+                memory_has_answer = False
+            else:
+                print(f"[MEMORY SELF-RAG] Verified: {verification['reason']}")
+
+        # ====================================================
+        # MEMORY-ONLY QUERY
+        # ====================================================
+
+        if (
+            is_memory_question
+            and
+            memory_has_answer
+        ):
+
+            print("\n" + "=" * 70)
+            print("MEMORY QUERY DETECTED")
+            print("=" * 70)
+
+            print(
+                "Answering from memory."
+            )
+
+            print("=" * 70)
+
+
+            memory_system_instruction = f"""
+You are the Harborstone Insurance Agent.
+
+The user is asking about information they previously
+provided in the conversation.
+
+IMPORTANT RULES:
+
+1. Answer using ONLY the provided memory context.
+2. Do NOT call any MCP tool.
+3. Do NOT use RAG.
+4. Do NOT invent information.
+5. If the answer is not present in memory, say that
+   you do not have that information in memory.
+6. Treat memory as user-provided context, not as
+   current Harborstone database state.
+7. Be concise.
+
+MEMORY CONTEXT:
+{memory_context}
+"""
+
+
+            memory_messages = [
+
+                {
+                    "role": "system",
+                    "content":
+                        memory_system_instruction
+                },
+
+                {
+                    "role": "user",
+                    "content":
+                        user_message
+                },
+            ]
+
+
+            try:
+
+                response = await asyncio.to_thread(
+
+                    groq_client.chat.completions.create,
+
+                    model=GROQ_MODEL,
+
+                    messages=memory_messages,
+
+                    tool_choice="none",
+                )
+
+
+                answer = (
+                    response.choices[0]
+                    .message.content
+                    or
+                    "I could not find that information "
+                    "in memory."
+                )
+
+
+                self._store_memory_message(
+                    role=RoleEnum.ASSISTANT,
+                    content=answer,
+                    msg_type=MessageType.CHAT,
+                )
+
+
+                return answer
+
+
+            except Exception as exc:
+
+                print(
+                    f"Memory query error: {exc}"
+                )
+
+                return (
+                    "I couldn't retrieve the requested "
+                    "information from memory."
+                )
 
 
         # ====================================================
@@ -1391,9 +1728,9 @@ class HarborstoneAgent:
                         )
 
 
-                    # ----------------------------------------
+                    # ------------------------------------
                     # STORE RAG ANSWER IN MEMORY
-                    # ----------------------------------------
+                    # ------------------------------------
 
                     self._store_memory_message(
                         role=RoleEnum.ASSISTANT,
@@ -1467,6 +1804,11 @@ IMPORTANT RULES:
 11. Use the memory context when it is relevant.
 12. Treat memory as context, not as proof of current database state.
 13. If current Harborstone data is required, use the MCP tools.
+14. If the user's question is about information they previously
+    told you, use the MEMORY CONTEXT instead of calling an MCP tool.
+15. Do not call get_customer_info, get_policy_details, or any
+    other MCP tool merely to answer a personal-memory question.
+16. If the answer exists in memory, answer directly.
 
 CURRENT AGENT USER:
 Username: {self.username}
@@ -1851,47 +2193,47 @@ Available MCP resources and prompts should be used when appropriate.
                     """
 Commands:
 
-  tools
-      Show currently available MCP tools.
+tools
+Show currently available MCP tools.
 
-  resources
-      Show available MCP resources.
+resources
+Show available MCP resources.
 
-  prompts
-      Show available MCP prompts.
+prompts
+Show available MCP prompts.
 
-  resource <URI>
-      Read an MCP resource.
+resource <uri>
+Read an MCP resource.
 
-  memory
-      Show current memory statistics.
+memory
+Show current memory statistics.
 
-  memory_show
-      Show current stored memories.
+memory_show
+Show current stored memories.
 
-  consolidate
-      Manually consolidate Short-Term Memory.
+consolidate
+Manually consolidate Short-Term Memory.
 
-  login
-      Login to Harborstone Insurance.
+login
+Login to Harborstone Insurance.
 
-  exit
-      Exit the agent.
+exit
+Exit the agent.
 
 Examples:
 
-  Check claim 1.
+Check claim 1.
 
-  Show me policy 2.
+Show me policy 2.
 
-  What is the status of claim 3?
+What is the status of claim 3?
 
-  File a claim for policy 2 for $5000
-  because the vessel was damaged during a storm.
+File a claim for policy 2 for $5000
+because the vessel was damaged during a storm.
 
-  Assess the risk of policy 1.
+Assess the risk of policy 1.
 
-  Approve claim 4.
+Approve claim 4.
 """
                 )
 
@@ -1937,8 +2279,8 @@ Examples:
                         "size"
                     )
                     else len(
-                        self.short_term_memory
-                        .get_scratchpad()
+                        str(self.short_term_memory
+                        .get_scratchpad())
                     )
                 )
 
@@ -2171,7 +2513,7 @@ Examples:
 
 
     # ========================================================
-    # CONNECT
+    # CONNECT & RUN
     # ========================================================
 
     async def run(self):
@@ -2193,17 +2535,16 @@ Examples:
         )
 
 
-        server_params = (
-            StdioServerParameters(
+        server_params = StdioServerParameters(
 
-                command=sys.executable,
+            command=sys.executable,
 
-                args=[
-                    str(SERVER_FILE)
-                ],
+            args=[
+                "-m",
+                "mcp_server.server"
+            ],
 
-                cwd=str(PROJECT_ROOT),
-            )
+            cwd=str(PROJECT_ROOT),
         )
 
 
@@ -2312,30 +2653,28 @@ Examples:
 # MAIN
 # ============================================================
 
-async def main():
+import sys
+import traceback
 
+async def main():
     agent = HarborstoneAgent()
 
-
     try:
-
         await agent.run()
+    except ExceptionGroup as eg:
+        import traceback
+        print("\n" + "=" * 50)
+        print("REAL ERROR INSIDE TASKGROUP:")
+        print("=" * 50)
+        for exc in eg.exceptions:
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
 
-
-    except KeyboardInterrupt:
-
-        print(
-            "\nAgent stopped."
-        )
-
-
-    except Exception as exc:
-
-        print(
-            "\nFatal error:"
-        )
-
-        print(exc)
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
 
 
 # ============================================================
