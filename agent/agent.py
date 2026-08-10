@@ -54,6 +54,10 @@ from memory.schema import (
     RoleEnum,
 )
 
+from context_eval.recursive_summarization import (
+    RecursiveSummarizationStrategy,
+)
+
 
 # ============================================================
 # PATHS
@@ -243,6 +247,16 @@ class HarborstoneAgent:
             short_term=self.short_term_memory,
             episodic=self.episodic_memory,
             semantic=self.semantic_memory,
+        )
+
+        # ====================================================
+        # CONTEXT MANAGEMENT
+        # ====================================================
+
+        self.context_strategy = (
+            RecursiveSummarizationStrategy(
+                keep_recent_messages=6
+            )
         )
 
 
@@ -455,7 +469,7 @@ class HarborstoneAgent:
             )
 
 
-        # ========================================================
+    # ========================================================
     # MEMORY: BUILD CONTEXT
     # ========================================================
 
@@ -468,15 +482,44 @@ class HarborstoneAgent:
         # ----------------------------------------------------
         # SHORT-TERM MEMORY
         # ----------------------------------------------------
-        short_term_messages = self.short_term_memory.get_messages()
-        if short_term_messages:
-            lines = []
-            for message in short_term_messages[-10:]:
-                role = message.role.value if hasattr(message.role, "value") else str(message.role)
-                content_str = _safe_content_to_str(message.content)
-                lines.append(f"{role}: {content_str}")
-            sections.append("SHORT-TERM MEMORY:\n" + "\n".join(lines))
+        short_term_messages = (
+            self.short_term_memory.get_messages()
+        )
 
+        if short_term_messages:
+        
+            # ---------------------------------------------
+            # Apply selected context strategy
+            # ---------------------------------------------
+            short_term_messages = (
+                self.context_strategy.prune(
+                    short_term_messages
+                )
+            )
+
+            lines = []
+
+            for message in short_term_messages:
+            
+                role = (
+                    message.role.value
+                    if hasattr(message.role, "value")
+                    else str(message.role)
+                )
+
+                content_str = _safe_content_to_str(
+                    message.content
+                )
+
+                lines.append(
+                    f"{role}: {content_str}"
+                )
+
+            sections.append(
+                "SHORT-TERM MEMORY:\n"
+                + "\n".join(lines)
+            )
+            
         # ----------------------------------------------------
         # SEMANTIC MEMORY
         # ----------------------------------------------------
