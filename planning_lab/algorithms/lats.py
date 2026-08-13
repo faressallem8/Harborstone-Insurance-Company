@@ -105,7 +105,7 @@ def lats(
         lesson_text = "\n".join(f"- {item}" for item in lessons[-4:]) or "- None yet."
         proposed = llm.with_structured_output(
             LATSActionBatch,
-            method="json_schema",
+            method="function_calling",
         ).invoke([
             ("system", "You are the action generator in LATS."),
             ("human", f"""Task: {task}
@@ -126,7 +126,7 @@ contain the fully written solution, not a placeholder or description of a soluti
             child.environment_score = feedback.score
             value_judgment = llm.with_structured_output(
                 ValueEstimate,
-                method="json_schema",
+                method="function_calling",
             ).invoke([
                 ("system", "You are the LATS value function."),
                 ("human", f"""Task: {task}

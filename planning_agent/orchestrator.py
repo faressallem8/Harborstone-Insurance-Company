@@ -5,7 +5,7 @@ Routes sub-tasks to PS, ToT, or LATS based on task characteristics.
 
 import time
 from typing import Dict, Any
-from groq import Groq
+from langchain_core.language_models.chat_models import BaseChatModel
 from mcp import ClientSession
 
 
@@ -32,7 +32,7 @@ class PlanningOrchestrator:
     - LATS: Complex decisions needing external feedback
     """
 
-    def __init__(self, session: ClientSession, llm: Groq):
+    def __init__(self, session: ClientSession, llm: BaseChatModel):
         self.session = session
         self.llm = llm
         self.env = HarborstoneEnvironment(session)
@@ -182,8 +182,8 @@ class PlanningOrchestrator:
             task=task,
             llm=self.llm,
             environment=self.env,  # YOUR REAL ENVIRONMENT!
-            iterations=10,
-            n_actions=3,
+            iterations=3,
+            n_actions=2,
             exploration_weight=1.414
         )
 

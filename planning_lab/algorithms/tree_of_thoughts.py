@@ -29,7 +29,7 @@ def tree_of_thoughts(
         for parent in frontier:
             generated = llm.with_structured_output(
                 ThoughtCandidates,
-                method="json_schema",
+                method="function_calling",
             ).invoke([
                 ("system", "Generate distinct candidate next steps for Tree-of-Thoughts search."),
                 ("human", f"""Problem: {problem}
@@ -39,7 +39,7 @@ Propose two distinct promising continuations."""),
             for state in generated.candidates[:2]:
                 judged = llm.with_structured_output(
                     ThoughtEvaluation,
-                    method="json_schema",
+                    method="function_calling",
                 ).invoke([
                     ("system", "Independently evaluate a partial solution."),
                     ("human", f"""Problem: {problem}

@@ -4,20 +4,20 @@ Test the orchestrator with the MCP server.
 
 import sys
 from pathlib import Path
-
-# Add project root to Python path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from groq import Groq
 import os
 from dotenv import load_dotenv
 
+# Use LangChain's Groq wrapper
+from langchain_groq import ChatGroq
+
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-llm = Groq(api_key=GROQ_API_KEY)
+llm = ChatGroq(api_key=GROQ_API_KEY, model="llama-3.3-70b-versatile")  # ✅ Now has .invoke()
 
 from planning_agent.orchestrator import PlanningOrchestrator
 
@@ -37,7 +37,6 @@ async def test():
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            # Login
             await session.call_tool("login", arguments={"username": "planner", "password": "planner"})
             print("✅ Login successful")
 
