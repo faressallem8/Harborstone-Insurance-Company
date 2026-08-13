@@ -1,0 +1,3 @@
+[submodule "planning"]
+	path = planning
+	url = https://github.com/faressallem8/task_decomposition_and_planning.git
