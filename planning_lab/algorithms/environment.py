@@ -1,24 +1,38 @@
-import random
+# planning_lab/algorithms/environment.py
 
-from ..models import EnvironmentFeedback
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any
+
+# ============================================================
+# EnvironmentFeedback defined here for standalone import
+# ============================================================
+class EnvironmentFeedback(BaseModel):
+    """Feedback from environment after executing an action."""
+    success: bool
+    score: float = Field(ge=0.0, le=1.0)
+    feedback: str = Field(default="")
+    details: Optional[Dict[str, Any]] = Field(default_factory=dict)
+# ============================================================
 
 
 class Environment:
-    """A stochastic evaluator biased toward favorable results."""
-
-    def __init__(
-        self,
-        success_threshold: float = 0.6,
-        rng: random.Random | None = None,
-    ):
-        if not 0.0 <= success_threshold <= 1.0:
-            raise ValueError("success_threshold must be between zero and one")
-        self.success_threshold = success_threshold
-        self.rng = rng or random.Random()
-
-    def evaluate(self, state: str) -> EnvironmentFeedback:
-        del state  # This evaluator intentionally ignores the candidate contents.
-        score = round(self.rng.betavariate(5.0, 2.0), 4)
-        success = score >= self.success_threshold
-        details = [] if success else ["The randomized evaluator rejected this attempt."]
-        return EnvironmentFeedback(success=success, score=score, details=details)
+    """
+    Abstract environment for LATS/Reflexion.
+    Should be replaced with real HarborstoneEnvironment.
+    """
+    
+    def __init__(self):
+        pass
+    
+    async def evaluate(self, action: str, context: Dict[str, Any]) -> EnvironmentFeedback:
+        """
+        Evaluate an action in the environment.
+        This is a placeholder - replace with real implementation.
+        """
+        # Placeholder implementation
+        return EnvironmentFeedback(
+            success=True,
+            score=1.0,
+            feedback="Action executed successfully (placeholder)",
+            details={"action": action, "context": context}
+        )

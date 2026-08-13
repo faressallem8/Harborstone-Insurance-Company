@@ -2,7 +2,7 @@
 
 from .decomposition import decompose_goal, execute_plan, final_output
 from .dynamic_decomposition import dynamic_decomposition
-from .environment import Environment
+from .environment import Environment, EnvironmentFeedback
 from .lats import flatten_lats_tree, lats
 from .plan_and_solve import plan_and_solve
 from .reflexion import reflexion

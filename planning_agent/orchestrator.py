@@ -23,6 +23,12 @@ from planning_agent.prompt_builder import (
 
 )
 
+# ============================================================
+# NEW: Import for decomposition
+# ============================================================
+from planning_agent.decomposition_wrapper import HarborstoneDecomposer
+# ============================================================
+
 
 class PlanningOrchestrator:
     """
@@ -37,11 +43,23 @@ class PlanningOrchestrator:
         self.llm = llm
         self.env = HarborstoneEnvironment(session)
 
+        # ============================================================
+        # NEW: Decomposer instance
+        # ============================================================
+        self.decomposer = HarborstoneDecomposer(session, llm)
+        # ============================================================
+
         # Metrics tracking
         self.metrics = {
             "plan_and_solve": {"calls": 0, "tokens": 0, "latency": 0, "success": 0, "total": 0},
             "tree_of_thoughts": {"calls": 0, "tokens": 0, "latency": 0, "success": 0, "total": 0},
             "lats": {"calls": 0, "tokens": 0, "latency": 0, "success": 0, "total": 0},
+            # ============================================================
+            # NEW: Decomposition metrics
+            # ============================================================
+            "decomposition_first": {"calls": 0, "tokens": 0, "latency": 0, "success": 0, "total": 0, "failures": 0},
+            "dynamic_decomposition": {"calls": 0, "tokens": 0, "latency": 0, "success": 0, "total": 0, "failures": 0},
+            # ============================================================
         }
 
     async def route_sub_task(self, sub_task: Dict[str, Any]) -> Dict[str, Any]:
@@ -68,6 +86,18 @@ class PlanningOrchestrator:
         # LATS: Complex decisions needing external feedback
         elif task_type in ["make_decision", "investigate_fraud", "check_fraud_indicators"]:
             return await self._run_lats(sub_task)
+
+        # ============================================================
+        # NEW: Decomposition routes
+        # ============================================================
+        elif task_type in ["investigate_claim", "complex_investigation"]:
+            goal = sub_task.get("goal", "Investigate claim")
+            use_dynamic = sub_task.get("use_dynamic", False)
+            if use_dynamic:
+                return await self._run_dynamic_decomposition(goal)
+            else:
+                return await self._run_decomposition_first(goal)
+        # ============================================================
 
         # Default: Plan-and-Solve
         else:
@@ -212,6 +242,64 @@ class PlanningOrchestrator:
         }
 
     # ============================================================
+    # NEW: DECOMPOSITION-FIRST
+    # ============================================================
+
+    async def _run_decomposition_first(self, goal: str) -> Dict[str, Any]:
+        """
+        Decomposition-first: generate plan upfront, then execute.
+        """
+        import time
+        start = time.time()
+        result = await self.decomposer.decomposition_first(goal)
+        latency = time.time() - start
+
+        self.metrics["decomposition_first"]["calls"] += 1
+        self.metrics["decomposition_first"]["total"] += 1
+        self.metrics["decomposition_first"]["latency"] += latency
+
+        if result.get("success", False):
+            self.metrics["decomposition_first"]["success"] += 1
+        else:
+            self.metrics["decomposition_first"]["failures"] += 1
+
+        return {
+            "algorithm": "decomposition_first",
+            "result": result,
+            "latency": latency,
+            "success": result.get("success", False)
+        }
+
+    # ============================================================
+    # NEW: DYNAMIC DECOMPOSITION
+    # ============================================================
+
+    async def _run_dynamic_decomposition(self, goal: str) -> Dict[str, Any]:
+        """
+        Dynamic decomposition: interleaved planning and execution.
+        """
+        import time
+        start = time.time()
+        result = await self.decomposer.dynamic_decomposition(goal)
+        latency = time.time() - start
+
+        self.metrics["dynamic_decomposition"]["calls"] += 1
+        self.metrics["dynamic_decomposition"]["total"] += 1
+        self.metrics["dynamic_decomposition"]["latency"] += latency
+
+        if result.get("success", False):
+            self.metrics["dynamic_decomposition"]["success"] += 1
+        else:
+            self.metrics["dynamic_decomposition"]["failures"] += 1
+
+        return {
+            "algorithm": "dynamic_decomposition",
+            "result": result,
+            "latency": latency,
+            "success": result.get("success", False)
+        }
+
+    # ============================================================
     # METRICS
     # ============================================================
 
@@ -223,14 +311,16 @@ class PlanningOrchestrator:
                 summary[algo] = {
                     "total_calls": data["total"],
                     "success_count": data["success"],
-                    "success_rate": data["success"] / data["total"] * 100,
-                    "avg_latency": data["latency"] / data["total"],
-                    "avg_tokens": data["tokens"] / data["total"],
+                    "failure_count": data.get("failures", 0),
+                    "success_rate": data["success"] / data["total"] * 100 if data["total"] > 0 else 0,
+                    "avg_latency": data["latency"] / data["total"] if data["total"] > 0 else 0,
+                    "avg_tokens": data["tokens"] / data["total"] if data["total"] > 0 else 0,
                 }
             else:
                 summary[algo] = {
                     "total_calls": 0,
                     "success_count": 0,
+                    "failure_count": 0,
                     "success_rate": 0,
                     "avg_latency": 0,
                     "avg_tokens": 0,
