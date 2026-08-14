@@ -15,7 +15,23 @@ class HarborstoneEnvironment:
     def __init__(self, session: ClientSession):
         self.session = session
 
-    def evaluate(self, state: str) -> EnvironmentFeedback:
+    def evaluate(
+        self,
+        state: str,
+        goal: str | None = None,
+    ) -> EnvironmentFeedback:
+        """
+        Evaluate a candidate state against the real Harborstone system.
+
+        Parameters
+        ----------
+        state:
+            Candidate output produced by the planning algorithm.
+
+        goal:
+            Optional original task. Used by grounded critique
+            (e.g. Self-Refine) but ignored by LATS when not provided.
+        """
         # Parse the state
         try:
             data = json.loads(state)
@@ -40,21 +56,33 @@ class HarborstoneEnvironment:
                 return EnvironmentFeedback(
                     success=True,
                     score=1.0,
-                    details=[f"Claim fetched: {result.get('claim_number', 'N/A')}"]
+                    feedback="Claim information was successfully retrieved.",
+                    details={
+                        "claim": result,
+                        "goal": goal,
+                    }
                 )
             elif action_type == "fetch_policy":
                 result = self._fetch_policy(params.get("policy_id", 1))
                 return EnvironmentFeedback(
                     success=True,
                     score=1.0,
-                    details=[f"Policy fetched: {result.get('policy_number', 'N/A')}"]
+                    feedback="Policy information was successfully retrieved.",
+                    details={
+                        "policy": result,
+                        "goal": goal,
+                    }
                 )
             elif action_type == "fetch_customer":
                 result = self._fetch_customer(params.get("customer_id", 1))
                 return EnvironmentFeedback(
                     success=True,
                     score=1.0,
-                    details=[f"Customer fetched: {result.get('full_name', 'Unknown')}"]
+                    feedback="Customer information was successfully retrieved.",
+                    details={
+                        "customer": result,
+                        "goal": goal,
+                    }
                 )
             elif action_type == "make_decision":
                 claim_id = params.get("claim_id", 1)
@@ -63,7 +91,11 @@ class HarborstoneEnvironment:
                 return EnvironmentFeedback(
                     success=True,
                     score=1.0,
-                    details=[f"Claim {claim_id} {decision}"]
+                    feedback=f"Claim {claim_id} was {decision}.",
+                    details={
+                        "decision": result,
+                        "goal": goal,
+                    }
                 )
             elif action_type == "check_fraud":
                 result = self._check_fraud(params.get("claim_id", 1))
@@ -71,24 +103,40 @@ class HarborstoneEnvironment:
                     return EnvironmentFeedback(
                         success=False,
                         score=0.2,
-                        details=[f"Fraud detected: {result.get('reason', '')}"]
+                        feedback="Fraud indicators were detected.",
+                        details={
+                            "fraud_result": result,
+                            "goal": goal,
+                        }
                     )
                 return EnvironmentFeedback(
                     success=True,
                     score=0.9,
-                    details=["No fraud detected"]
+                    feedback="No fraud indicators were detected.",
+                    details={
+                        "fraud_result": result,
+                        "goal": goal,
+                    }
                 )
             else:
                 return EnvironmentFeedback(
                     success=False,
                     score=0.0,
-                    details=[f"Unknown action: {action_type}"]
+                    feedback=f"Unsupported action '{action_type}'.",
+                    details={
+                        "action": action_type,
+                        "goal": goal,
+                    }
                 )
         except Exception as e:
             return EnvironmentFeedback(
                 success=False,
                 score=0.0,
-                details=[f"Error: {str(e)}"]
+                feedback="Environment evaluation failed.",
+                details={
+                    "error": str(e),
+                    "goal": goal,
+                }
             )
 
     # ------------------------------
@@ -153,7 +201,8 @@ class HarborstoneEnvironment:
                     WHERE policy_id = (SELECT policy_id FROM Claims WHERE claim_id = ?)
                     AND claim_id != ?
                 """, (claim_id, claim_id))
-                count = cursor.fetchone()[0] if cursor.fetchone() else 0
+                row = cursor.fetchone()
+                count = row[0] if row else 0
                 if count > 3:
                     return {"suspicious": True, "reason": f"Multiple claims ({count})"}
                 return {"suspicious": False, "reason": "No fraud indicators"}
