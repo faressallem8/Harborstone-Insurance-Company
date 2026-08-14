@@ -15,7 +15,7 @@ class HarborstoneEnvironment:
     def __init__(self, session: ClientSession):
         self.session = session
 
-    def evaluate(
+    async def evaluate(
         self,
         state: str,
         goal: str | None = None,
@@ -52,7 +52,7 @@ class HarborstoneEnvironment:
 
         try:
             if action_type == "fetch_claim":
-                result = self._fetch_claim(params.get("claim_id", 1))
+                result = await self._fetch_claim(params.get("claim_id", 1))
                 return EnvironmentFeedback(
                     success=True,
                     score=1.0,
@@ -63,7 +63,7 @@ class HarborstoneEnvironment:
                     }
                 )
             elif action_type == "fetch_policy":
-                result = self._fetch_policy(params.get("policy_id", 1))
+                result = await self._fetch_policy(params.get("policy_id", 1))
                 return EnvironmentFeedback(
                     success=True,
                     score=1.0,
@@ -74,7 +74,7 @@ class HarborstoneEnvironment:
                     }
                 )
             elif action_type == "fetch_customer":
-                result = self._fetch_customer(params.get("customer_id", 1))
+                result = await self._fetch_customer(params.get("customer_id", 1))
                 return EnvironmentFeedback(
                     success=True,
                     score=1.0,
@@ -87,7 +87,7 @@ class HarborstoneEnvironment:
             elif action_type == "make_decision":
                 claim_id = params.get("claim_id", 1)
                 decision = params.get("decision", "approved")
-                result = self._make_decision(claim_id, decision)
+                result = await self._make_decision(claim_id, decision)
                 return EnvironmentFeedback(
                     success=True,
                     score=1.0,
@@ -140,74 +140,96 @@ class HarborstoneEnvironment:
             )
 
     # ------------------------------
-    # REAL MCP TOOL CALLS (synchronous)
+    # REAL MCP TOOL CALLS (asynchronous)
     # ------------------------------
-
-    def _fetch_claim(self, claim_id: int) -> Dict:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                self.session.call_tool("check_claim_status", arguments={"claim_id": claim_id})
-            )
-        finally:
-            loop.close()
+    
+    async def _fetch_claim(self, claim_id: int) -> Dict:
+        result = await self.session.call_tool(
+            "check_claim_status",
+            arguments={
+                "claim_id": claim_id,
+            },
+        )
         return self._parse_result(result)
-
-    def _fetch_policy(self, policy_id: int) -> Dict:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                self.session.call_tool("get_policy_details", arguments={"policy_id": policy_id})
-            )
-        finally:
-            loop.close()
+    
+    
+    async def _fetch_policy(self, policy_id: int) -> Dict:
+        result = await self.session.call_tool(
+            "get_policy_details",
+            arguments={
+                "policy_id": policy_id,
+            },
+        )
         return self._parse_result(result)
-
-    def _fetch_customer(self, customer_id: int) -> Dict:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                self.session.call_tool("get_customer_info", arguments={"customer_id": customer_id})
-            )
-        finally:
-            loop.close()
+    
+    
+    async def _fetch_customer(self, customer_id: int) -> Dict:
+        result = await self.session.call_tool(
+            "get_customer_info",
+            arguments={
+                "customer_id": customer_id,
+            },
+        )
         return self._parse_result(result)
-
-    def _make_decision(self, claim_id: int, decision: str) -> Dict:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                self.session.call_tool(
-                    "approve_claim",
-                    arguments={"claim_id": claim_id, "decision": decision, "notes": "Planner agent decision"}
-                )
-            )
-        finally:
-            loop.close()
+    
+    
+    async def _make_decision(
+        self,
+        claim_id: int,
+        decision: str,
+    ) -> Dict:
+        result = await self.session.call_tool(
+            "approve_claim",
+            arguments={
+                "claim_id": claim_id,
+                "decision": decision,
+                "notes": "Planner agent decision",
+            },
+        )
         return self._parse_result(result)
-
+    
+    
     def _check_fraud(self, claim_id: int) -> Dict:
         import pyodbc
         from mcp_server.server import get_db
+    
         try:
             with get_db() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT COUNT(*) FROM Claims
-                    WHERE policy_id = (SELECT policy_id FROM Claims WHERE claim_id = ?)
+    
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM Claims
+                    WHERE policy_id = (
+                        SELECT policy_id
+                        FROM Claims
+                        WHERE claim_id = ?
+                    )
                     AND claim_id != ?
-                """, (claim_id, claim_id))
+                    """,
+                    (claim_id, claim_id),
+                )
+    
                 row = cursor.fetchone()
                 count = row[0] if row else 0
+    
                 if count > 3:
-                    return {"suspicious": True, "reason": f"Multiple claims ({count})"}
-                return {"suspicious": False, "reason": "No fraud indicators"}
+                    return {
+                        "suspicious": True,
+                        "reason": f"Multiple claims ({count})",
+                    }
+    
+                return {
+                    "suspicious": False,
+                    "reason": "No fraud indicators",
+                }
+    
         except Exception as e:
-            return {"suspicious": False, "reason": f"Check error: {e}"}
+            return {
+                "suspicious": False,
+                "reason": f"Check error: {e}",
+            }
 
     def _parse_result(self, result) -> Dict:
         if hasattr(result, "content"):

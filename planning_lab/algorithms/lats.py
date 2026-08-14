@@ -85,7 +85,7 @@ def _trajectory_reflections(node: LATSNode) -> list[str]:
     return list(reversed(path))
 
 
-def lats(
+async def lats(
     task: str,
     llm: BaseChatModel,
     environment: Environment,
@@ -121,7 +121,7 @@ contain the fully written solution, not a placeholder or description of a soluti
         for item in proposed.actions[:n_actions]:
             child = LATSNode(state=item.state.strip(), action=item.action, parent=leaf)
             leaf.children.append(child)
-            feedback = environment.evaluate(child.state)
+            feedback = await environment.evaluate(child.state)
             child.feedback = feedback
             child.environment_score = feedback.score
             value_judgment = llm.with_structured_output(

@@ -135,6 +135,7 @@ class PlanningOrchestrator:
 
         return {
             "algorithm": "plan_and_solve",
+            "success": True,
             "result": result,
             "latency": latency,
             "tokens": tokens,
@@ -208,7 +209,7 @@ class PlanningOrchestrator:
         task = build_lats_task(sub_task)
 
         # Call the toolkit's function with your REAL environment - NO REWRITING!
-        result = lats(
+        result = await lats(
             task=task,
             llm=self.llm,
             environment=self.env,  # YOUR REAL ENVIRONMENT!
@@ -298,6 +299,56 @@ class PlanningOrchestrator:
             "latency": latency,
             "success": result.get("success", False)
         }
+
+    async def evaluate_goal(
+        self,
+        algorithm: str,
+        goal: str,
+        environment=None,
+    ) -> Dict[str, Any]:
+        """
+        Evaluate a goal using the requested planning algorithm.
+
+        This method provides a public interface for the evaluation
+        framework without exposing the internal planner methods.
+        """
+
+        algorithm = algorithm.lower()
+
+        if algorithm == "plan_and_solve":
+            return await self._run_plan_and_solve({
+                "type": "fetch_claim",
+                "goal": goal,
+            })
+
+        elif algorithm == "tree_of_thoughts":
+            return await self._run_tree_of_thoughts({
+                "type": "assess_risk",
+                "goal": goal,
+            })
+
+        elif algorithm == "lats":
+        
+           original_env = self.env
+
+           if environment is not None:
+               self.env = environment
+
+           try:
+               return await self._run_lats({
+                   "type": "make_decision",
+                   "goal": goal,
+               })
+           finally:
+               self.env = original_env
+
+        elif algorithm == "decomposition_first":
+            return await self._run_decomposition_first(goal)
+
+        elif algorithm == "dynamic_decomposition":
+            return await self._run_dynamic_decomposition(goal)
+
+        raise ValueError(f"Unknown planning algorithm: {algorithm}")
 
     # ============================================================
     # METRICS
