@@ -9,7 +9,7 @@ class SelfRefineComparator:
         self.environment = environment
         self.grounded = HarborstoneSelfRefine(llm, environment)
 
-    def compare(self, goal: str, draft: str):
+    async def compare(self, goal: str, draft: str):
 
         ungrounded = reflect_and_refine(
             goal=goal,
@@ -17,7 +17,7 @@ class SelfRefineComparator:
             llm=self.llm,
         )
 
-        grounded = self.grounded.refine(
+        grounded = await self.grounded.refine(
             goal=goal,
             draft=draft,
         )

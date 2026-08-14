@@ -29,7 +29,7 @@ class HarborstoneSelfRefine:
         self.llm = llm
         self.environment = environment
 
-    def refine(
+    async def refine(
         self,
         goal: str,
         draft: str,
@@ -51,7 +51,7 @@ class HarborstoneSelfRefine:
             Original toolkit output.
         """
 
-        feedback = self.environment.evaluate(
+        feedback = await self.environment.evaluate(
             state=draft,
             goal=goal,
         )

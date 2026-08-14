@@ -5,7 +5,7 @@ from planning_lab.models import EnvironmentFeedback
 
 class UngroundedEnvironmentAdapter:
 
-    def evaluate(self, state: str) -> EnvironmentFeedback:
+    async def evaluate(self, state: str) -> EnvironmentFeedback:
 
         text = state.lower()
 

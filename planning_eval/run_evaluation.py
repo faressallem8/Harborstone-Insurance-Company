@@ -150,7 +150,7 @@ class EvaluationRunner:
             # Self-Refine comparison
             # -------------------------
 
-            refine_result = self.refine_comparator.compare(
+            refine_result = await self.refine_comparator.compare(
                 goal=case.goal,
                 draft=self._extract_text(
                     case_result["plan_and_solve"]["result"]

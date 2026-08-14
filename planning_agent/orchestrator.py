@@ -4,7 +4,7 @@ Routes sub-tasks to PS, ToT, or LATS based on task characteristics.
 """
 
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 from mcp import ClientSession
 
@@ -16,12 +16,8 @@ from planning_lab.algorithms.lats import lats
 
 
 from planning_agent.environment import HarborstoneEnvironment
-from planning_agent.prompt_builder import (
-    build_plan_and_solve_prompt,
-    build_tree_of_thoughts_problem,
-    build_lats_task,
 
-)
+
 
 # ============================================================
 # NEW: Import for decomposition
@@ -107,26 +103,13 @@ class PlanningOrchestrator:
     # PLAN-AND-SOLVE
     # ============================================================
 
-    async def _run_plan_and_solve(self, sub_task: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Plan-and-Solve: One plan, execute step-by-step.
-        Uses the toolkit's plan_and_solve function directly.
-        """
+    async def _run_plan_and_solve(self, goal: str) -> Dict[str, Any]:
+        """Run Plan-and-Solve on the goal string."""
         start = time.time()
-
-        # Build the prompt
-        prompt = build_plan_and_solve_prompt(sub_task)
-
-        # Call the toolkit's function - NO REWRITING!
-        result = plan_and_solve(
-            question=prompt,
-            llm=self.llm
-        )
-
+        result = plan_and_solve(question=goal, llm=self.llm)
         latency = time.time() - start
-        tokens = len(prompt.split()) + len(result.split())
+        tokens = len(goal.split()) + len(result.split())
 
-        # Track metrics
         self.metrics["plan_and_solve"]["calls"] += 1
         self.metrics["plan_and_solve"]["tokens"] += tokens
         self.metrics["plan_and_solve"]["latency"] += latency
@@ -139,44 +122,31 @@ class PlanningOrchestrator:
             "result": result,
             "latency": latency,
             "tokens": tokens,
-            "sub_task": sub_task
         }
 
     # ============================================================
     # TREE OF THOUGHTS
     # ============================================================
 
-    async def _run_tree_of_thoughts(self, sub_task: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Tree of Thoughts: Generate multiple candidates, self-evaluate.
-        Uses the toolkit's tree_of_thoughts function directly.
-        """
+    async def _run_tree_of_thoughts(self, goal: str) -> Dict[str, Any]:
+        """Run Tree of Thoughts on the goal string."""
         start = time.time()
-
-        # Build the problem description
-        problem = build_tree_of_thoughts_problem(sub_task)
-
-        # Call the toolkit's function - NO REWRITING!
         thoughts = tree_of_thoughts(
-            problem=problem,
+            problem=goal,
             llm=self.llm,
             depth=3,
             beam_width=5
         )
-
-        # Evaluate the best thought against the environment
         best_thought = None
         best_score = -1
-
         for thought in thoughts:
             if thought.score > best_score:
                 best_score = thought.score
                 best_thought = thought
 
         latency = time.time() - start
-        tokens = len(problem.split()) + sum(len(t.state.split()) for t in thoughts)
+        tokens = len(goal.split()) + sum(len(t.state.split()) for t in thoughts)
 
-        # Track metrics
         self.metrics["tree_of_thoughts"]["calls"] += 1
         self.metrics["tree_of_thoughts"]["tokens"] += tokens
         self.metrics["tree_of_thoughts"]["latency"] += latency
@@ -191,39 +161,27 @@ class PlanningOrchestrator:
             "all_thoughts": [{"state": t.state, "score": t.score, "rationale": t.rationale} for t in thoughts],
             "latency": latency,
             "tokens": tokens,
-            "sub_task": sub_task
         }
 
     # ============================================================
     # LATS (MCTS with Grounded Environment)
     # ============================================================
 
-    async def _run_lats(self, sub_task: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        LATS: MCTS with grounded external feedback.
-        Uses the toolkit's lats function with your REAL environment.
-        """
+    async def _run_lats(self, goal: str, environment: Optional[HarborstoneEnvironment] = None) -> Dict[str, Any]:
+        """Run LATS on the goal string."""
         start = time.time()
-
-        # Build the task description
-        task = build_lats_task(sub_task)
-
-        # Call the toolkit's function with your REAL environment - NO REWRITING!
+        actual_env = environment or self.env
         result = await lats(
-            task=task,
+            task=goal,
             llm=self.llm,
-            environment=self.env,  # YOUR REAL ENVIRONMENT!
+            environment=actual_env,
             iterations=3,
             n_actions=2,
             exploration_weight=1.414
         )
-
         latency = time.time() - start
+        tokens = len(goal.split()) + len(result.output.split())
 
-        # Estimate tokens
-        tokens = len(task.split()) + len(result.output.split())
-
-        # Track metrics
         self.metrics["lats"]["calls"] += 1
         self.metrics["lats"]["tokens"] += tokens
         self.metrics["lats"]["latency"] += latency
@@ -239,7 +197,6 @@ class PlanningOrchestrator:
             "iterations": result.iterations,
             "latency": latency,
             "tokens": tokens,
-            "sub_task": sub_task
         }
 
     # ============================================================
@@ -304,43 +261,22 @@ class PlanningOrchestrator:
         self,
         algorithm: str,
         goal: str,
-        environment=None,
+        environment: Optional[HarborstoneEnvironment] = None,
     ) -> Dict[str, Any]:
         """
         Evaluate a goal using the requested planning algorithm.
-
-        This method provides a public interface for the evaluation
-        framework without exposing the internal planner methods.
+        Now the goal string is passed directly to the algorithm.
         """
-
         algorithm = algorithm.lower()
 
         if algorithm == "plan_and_solve":
-            return await self._run_plan_and_solve({
-                "type": "fetch_claim",
-                "goal": goal,
-            })
+            return await self._run_plan_and_solve(goal)
 
         elif algorithm == "tree_of_thoughts":
-            return await self._run_tree_of_thoughts({
-                "type": "assess_risk",
-                "goal": goal,
-            })
+            return await self._run_tree_of_thoughts(goal)
 
         elif algorithm == "lats":
-        
-           original_env = self.env
-
-           if environment is not None:
-               self.env = environment
-
-           try:
-               return await self._run_lats({
-                   "type": "make_decision",
-                   "goal": goal,
-               })
-           finally:
-               self.env = original_env
+            return await self._run_lats(goal, environment)
 
         elif algorithm == "decomposition_first":
             return await self._run_decomposition_first(goal)
@@ -349,7 +285,6 @@ class PlanningOrchestrator:
             return await self._run_dynamic_decomposition(goal)
 
         raise ValueError(f"Unknown planning algorithm: {algorithm}")
-
     # ============================================================
     # METRICS
     # ============================================================
