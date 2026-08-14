@@ -79,8 +79,10 @@ Use the validation above while critiquing and revising the draft.
 Do not contradict the environment.
 """
 
-        return reflect_and_refine(
+        result = reflect_and_refine(
             goal=grounded_goal,
             draft=draft,
             llm=self.llm,
         )
+        
+        return result
