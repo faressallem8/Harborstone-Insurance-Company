@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Admin{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col"><h2><i class="fas fa-user-cog me-2"></i>Admin Dashboard</h2></div>
+</div>
+
+<ul class="nav nav-tabs mb-4" id="adminTabs" role="tablist">
+    <li class="nav-item"><button class="nav-link active" id="tools-tab" data-bs-toggle="tab" data-bs-target="#tools"><i class="fas fa-wrench me-1"></i>Tools</button></li>
+    <li class="nav-item"><button class="nav-link" id="documents-tab" data-bs-toggle="tab" data-bs-target="#documents"><i class="fas fa-file-alt me-1"></i>Documents</button></li>
+    <li class="nav-item"><button class="nav-link" id="hitl-tab" data-bs-toggle="tab" data-bs-target="#hitl"><i class="fas fa-user-check me-1"></i>HITL <span class="badge bg-danger" id="hitl-badge">0</span></button></li>
+    <li class="nav-item"><button class="nav-link" id="tickets-tab" data-bs-toggle="tab" data-bs-target="#tickets"><i class="fas fa-ticket-alt me-1"></i>Tickets <span class="badge bg-warning" id="ticket-badge">0</span></button></li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade show active" id="tools">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-wrench me-2"></i>Agent Tools</div>
+            <div class="card-body" id="tools-container"><div class="text-center py-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading...</div></div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="documents">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-file-alt me-2"></i>RAG Documents <button class="btn btn-sm btn-primary float-end" onclick="showAddDocumentModal()"><i class="fas fa-plus me-1"></i>Add</button></div>
+            <div class="card-body" id="documents-container"><div class="text-center py-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading...</div></div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="hitl">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-user-check me-2"></i>Pending HITL Tasks</div>
+            <div class="card-body" id="hitl-container"><div class="text-center py-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading...</div></div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="tickets">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-ticket-alt me-2"></i>Open Tickets</div>
+            <div class="card-body" id="tickets-container"><div class="text-center py-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading...</div></div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="addDocumentModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title"><i class="fas fa-file-alt me-2"></i>Add RAG Document</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body">
+                <form id="addDocumentForm">
+                    <div class="mb-3"><label class="form-label">Document Name</label><input type="text" class="form-control" id="doc-name" required></div>
+                    <div class="mb-3"><label class="form-label">Content</label><textarea class="form-control" id="doc-content" rows="8" required></textarea></div>
+                    <div class="mb-3"><label class="form-label">Source</label><input type="text" class="form-control" id="doc-source" placeholder="e.g., policy_manual"></div>
+                    <div class="form-check"><input type="checkbox" class="form-check-input" id="doc-active" checked><label class="form-check-label" for="doc-active">Active</label></div>
+                </form>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button type="button" class="btn btn-primary" onclick="addDocument()"><i class="fas fa-plus me-1"></i>Add</button></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function loadAllData() { loadTools(); loadDocuments(); loadHITL(); loadTickets(); }
+
+    async function loadTools() {
+        try {
+            const response = await fetch('/api/admin/tools');
+            const tools = await response.json();
+            const agents = {};
+            tools.forEach(t => { if (!agents[t.agent_name]) agents[t.agent_name] = []; agents[t.agent_name].push(t); });
+            let html = '';
+            for (const [agent, toolList] of Object.entries(agents)) {
+                html += `<h6 class="mt-3"><i class="fas fa-robot me-1"></i>${agent}</h6><div class="row mb-2">`;
+                toolList.forEach(t => {
+                    html += `<div class="col-md-4"><div class="form-check form-switch">
+                        <input class="form-check-input tool-toggle" type="checkbox" data-tool="${t.tool_name}" data-agent="${t.agent_name}" ${t.enabled ? 'checked' : ''}>
+                        <label class="form-check-label">${t.tool_name}</label>
+                    </div></div>`;
+                });
+                html += `</div>`;
+            }
+            document.getElementById('tools-container').innerHTML = html;
+            document.querySelectorAll('.tool-toggle').forEach(el => {
+                el.addEventListener('change', function() {
+                    fetch('/api/admin/tools/toggle', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tool_name: this.dataset.tool, agent_name: this.dataset.agent, enabled: this.checked })
+                    });
+                });
+            });
+        } catch(e) { document.getElementById('tools-container').innerHTML = `<div class="alert alert-danger">${e.message}</div>`; }
+    }
+
+    async function loadDocuments() {
+        try {
+            const response = await fetch('/api/admin/documents');
+            const docs = await response.json();
+            if (docs.length === 0) { document.getElementById('documents-container').innerHTML = '<div class="text-center text-muted py-3">No documents.</div>'; return; }
+            let html = `<table class="table table-sm"><thead><tr><th>Name</th><th>Source</th><th>Status</th><th>Actions</th></tr></thead><tbody>`;
+            docs.forEach(d => {
+                html += `<tr><td>${d.name}</td><td>${d.source || 'N/A'}</td><td><span class="badge ${d.active ? 'bg-success' : 'bg-secondary'}">${d.active ? 'Active' : 'Inactive'}</span></td>
+                        <td>${d.active ? `<button class="btn btn-sm btn-danger" onclick="deleteDocument(${d.id})"><i class="fas fa-trash"></i></button>` : ''}</td></tr>`;
+            });
+            html += `</tbody></table>`;
+            document.getElementById('documents-container').innerHTML = html;
+        } catch(e) { document.getElementById('documents-container').innerHTML = `<div class="alert alert-danger">${e.message}</div>`; }
+    }
+
+    function showAddDocumentModal() { new bootstrap.Modal(document.getElementById('addDocumentModal')).show(); }
+
+    async function addDocument() {
+        const name = document.getElementById('doc-name').value.trim(), content = document.getElementById('doc-content').value.trim();
+        if (!name || !content) { alert('Fill in name and content.'); return; }
+        await fetch('/api/admin/documents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, content, source: document.getElementById('doc-source').value.trim(), active: document.getElementById('doc-active').checked }) });
+        bootstrap.Modal.getInstance(document.getElementById('addDocumentModal')).hide();
+        loadDocuments();
+    }
+
+    async function deleteDocument(id) { if (!confirm('Delete?')) return; await fetch(`/api/admin/documents/${id}`, { method: 'DELETE' }); loadDocuments(); }
+
+    async function loadHITL() {
+        try {
+            const response = await fetch('/api/admin/hitl');
+            const tasks = await response.json();
+            document.getElementById('hitl-badge').textContent = tasks.length;
+            if (tasks.length === 0) { document.getElementById('hitl-container').innerHTML = '<div class="text-center text-muted py-3">No pending HITL tasks.</div>'; return; }
+            let html = '';
+            tasks.forEach(t => {
+                html += `<div class="border-bottom py-2">
+                    <div class="d-flex justify-content-between"><strong>${t.graph_name}</strong><span class="badge bg-warning">Pending</span></div>
+                    <div class="text-muted small">Run: ${t.run_id} | Node: ${t.node_name}</div>
+                    <div><pre class="small bg-light p-2 rounded" style="max-height:80px;overflow:auto;">${JSON.stringify(t.state, null, 2)}</pre></div>
+                    <div><button class="btn btn-sm btn-success" onclick="resolveHITL(${t.id}, 'approved')"><i class="fas fa-check me-1"></i>Approve</button>
+                    <button class="btn btn-sm btn-danger" onclick="resolveHITL(${t.id}, 'rejected')"><i class="fas fa-times me-1"></i>Reject</button></div></div>`;
+            });
+            document.getElementById('hitl-container').innerHTML = html;
+        } catch(e) { document.getElementById('hitl-container').innerHTML = `<div class="alert alert-danger">${e.message}</div>`; }
+    }
+
+    async function resolveHITL(id, action) { await fetch(`/api/admin/hitl/${id}/resolve?action=${action}`, { method: 'POST' }); loadHITL(); }
+
+    async function loadTickets() {
+        try {
+            const response = await fetch('/api/admin/tickets');
+            const tickets = await response.json();
+            document.getElementById('ticket-badge').textContent = tickets.length;
+            if (tickets.length === 0) { document.getElementById('tickets-container').innerHTML = '<div class="text-center text-muted py-3">No open tickets.</div>'; return; }
+            let html = '';
+            tickets.forEach(t => {
+                html += `<div class="border-bottom py-2">
+                    <div class="d-flex justify-content-between"><strong>${t.graph_name}</strong><span class="badge ${t.status === 'open' ? 'bg-danger' : 'bg-warning'}">${t.status}</span></div>
+                    <div class="text-danger small">Error: ${t.error_message}</div>
+                    <button class="btn btn-sm btn-primary mt-1" onclick="resolveTicket(${t.id})"><i class="fas fa-check me-1"></i>Resolve</button></div>`;
+            });
+            document.getElementById('tickets-container').innerHTML = html;
+        } catch(e) { document.getElementById('tickets-container').innerHTML = `<div class="alert alert-danger">${e.message}</div>`; }
+    }
+
+    async function resolveTicket(id) { if (!confirm('Resolve this ticket?')) return; await fetch(`/api/admin/tickets/${id}/resolve`, { method: 'POST' }); loadTickets(); }
+
+    loadAllData();
+    setInterval(() => { loadHITL(); loadTickets(); }, 10000);
+</script>
+{% endblock %}

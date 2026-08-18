@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Chat{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <i class="fas fa-robot me-2"></i>Agents
+            </div>
+            <div class="card-body">
+                <div class="list-group agent-switcher" id="agent-list">
+                    <button class="list-group-item list-group-item-action active" data-agent="appeal">
+                        <i class="fas fa-gavel me-2"></i>Appeal Agent
+                    </button>
+                    <button class="list-group-item list-group-item-action" data-agent="renewal">
+                        <i class="fas fa-sync-alt me-2"></i>Renewal Agent
+                    </button>
+                    <button class="list-group-item list-group-item-action" data-agent="fraud">
+                        <i class="fas fa-search me-2"></i>Fraud Agent
+                    </button>
+                </div>
+                <hr>
+                <div class="text-muted small"><i class="fas fa-info-circle me-1"></i>Select an agent to start chatting</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-9">
+        <div class="card">
+            <div class="card-header bg-white">
+                <span id="current-agent-name"><i class="fas fa-gavel me-2"></i>Appeal Agent</span>
+                <span class="badge bg-success float-end">Online</span>
+            </div>
+            <div class="card-body">
+                <div id="chat-box">
+                    <div class="text-center text-muted py-5">
+                        <i class="fas fa-comment-dots fa-3x mb-3 d-block"></i>
+                        <p>Select an agent and start a conversation</p>
+                    </div>
+                </div>
+                <div class="input-group mt-3">
+                    <input type="text" class="form-control" id="message-input" placeholder="Type your message...">
+                    <button class="btn btn-primary" id="send-button">
+                        <i class="fas fa-paper-plane"></i> Send
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentAgent = 'appeal';
+    let agentNames = {'appeal': 'Appeal Agent', 'renewal': 'Renewal Agent', 'fraud': 'Fraud Agent'};
+    let agentIcons = {'appeal': 'fa-gavel', 'renewal': 'fa-sync-alt', 'fraud': 'fa-search'};
+
+    document.querySelectorAll('#agent-list button').forEach(btn => {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('#agent-list button').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            currentAgent = this.dataset.agent;
+            document.getElementById('current-agent-name').innerHTML =
+                `<i class="fas ${agentIcons[currentAgent]} me-2"></i>${agentNames[currentAgent]}`;
+            document.getElementById('chat-box').innerHTML = `
+                <div class="text-center text-muted py-3">
+                    <i class="fas ${agentIcons[currentAgent]} fa-2x mb-2 d-block"></i>
+                    <p>Chatting with <strong>${agentNames[currentAgent]}</strong></p>
+                </div>
+            `;
+            document.getElementById('message-input').focus();
+        });
+    });
+
+    document.getElementById('send-button').addEventListener('click', sendMessage);
+    document.getElementById('message-input').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+    async function sendMessage() {
+        const input = document.getElementById('message-input');
+        const message = input.value.trim();
+        if (!message) return;
+
+        const chatBox = document.getElementById('chat-box');
+        chatBox.innerHTML += `<div class="user-message"><i class="fas fa-user me-2"></i>${escapeHtml(message)}</div>`;
+        input.value = '';
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        const loadingId = 'loading-' + Date.now();
+        chatBox.innerHTML += `
+            <div id="${loadingId}" class="agent-message">
+                <span class="agent-name"><i class="fas ${agentIcons[currentAgent]} me-1"></i>${agentNames[currentAgent]}</span><br>
+                <span class="spinner-border spinner-border-sm me-2" role="status"></span> Thinking...
+            </div>
+        `;
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        try {
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agent: currentAgent, message: message })
+            });
+            const data = await response.json();
+            document.getElementById(loadingId).remove();
+            chatBox.innerHTML += `
+                <div class="agent-message">
+                    <span class="agent-name"><i class="fas ${agentIcons[currentAgent]} me-1"></i>${agentNames[currentAgent]}</span><br>
+                    ${escapeHtml(data.reply)}
+                </div>
+            `;
+            chatBox.scrollTop = chatBox.scrollHeight;
+        } catch (error) {
+            document.getElementById(loadingId).remove();
+            chatBox.innerHTML += `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle me-2"></i>Error: ${error.message}</div>`;
+        }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML.replace(/\n/g, '<br>');
+    }
+</script>
+{% endblock %}
