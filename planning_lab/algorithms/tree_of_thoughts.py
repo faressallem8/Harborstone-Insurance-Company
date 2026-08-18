@@ -7,7 +7,7 @@ from ..models import Thought
 class ThoughtCandidates(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    candidates: list[str] = Field(min_length=1, max_length=3)
+    candidates: list[str] = Field(min_length=1, max_length=3, description="List of candidate next steps as strings.")
 
 
 class ThoughtEvaluation(BaseModel):
@@ -29,19 +29,23 @@ def tree_of_thoughts(
         for parent in frontier:
             generated = llm.with_structured_output(
                 ThoughtCandidates,
-                method="function_calling",
+                method="json_mode",
             ).invoke([
-                ("system", "Generate distinct candidate next steps for Tree-of-Thoughts search."),
+                ("system", """Generate candidate next steps for Tree-of-Thoughts search. 
+Return a JSON object with a 'candidates' field that is an array of strings. 
+Each string is a complete description of a next step. 
+Do not include any other fields or nested objects.
+Example: {"candidates": ["Step 1 description", "Step 2 description"]}"""),
                 ("human", f"""Problem: {problem}
 Partial path: {parent.state}
-Propose two distinct promising continuations."""),
+Propose exactly two distinct promising continuations as strings."""),
             ], temperature=0.5)
             for state in generated.candidates[:2]:
                 judged = llm.with_structured_output(
                     ThoughtEvaluation,
-                    method="function_calling",
+                    method="json_mode",
                 ).invoke([
-                    ("system", "Independently evaluate a partial solution."),
+                    ("system", "Evaluate a partial solution. Return a JSON with 'score' (float 0-1) and 'rationale' (string)."),
                     ("human", f"""Problem: {problem}
 Candidate path: {state}
 Score correctness, feasibility, and progress. Do not reward confident wording."""),

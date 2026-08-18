@@ -20,7 +20,8 @@ class LATSAction(BaseModel):
 class LATSActionBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    actions: list[LATSAction] = Field(min_length=1, max_length=3)
+    # Change from 'actions' to 'candidates' to match the model output
+    candidates: list[LATSAction] = Field(min_length=1, max_length=3)
 
 
 class ValueEstimate(BaseModel):
@@ -105,30 +106,28 @@ async def lats(
         lesson_text = "\n".join(f"- {item}" for item in lessons[-4:]) or "- None yet."
         proposed = llm.with_structured_output(
             LATSActionBatch,
-            method="function_calling",
+            method="json_mode",
         ).invoke([
-            ("system", "You are the action generator in LATS."),
+            ("system", "You are the action generator in LATS. Return a JSON object with a 'candidates' field containing a list of objects, each with 'state' and 'action' fields. The 'state' is the complete proposed solution, and 'action' is a short label."),
             ("human", f"""Task: {task}
 Current trajectory/state:
 {leaf.state}
 Reflections learned from failed branches:
 {lesson_text}
 
-Propose exactly {n_actions} distinct complete candidate solution(s). Each state must
-contain the fully written solution, not a placeholder or description of a solution.""",
-            ),
+Propose exactly {n_actions} distinct complete candidate solution(s). Each candidate must include a 'state' (the full solution) and an 'action' (short label)."""),
         ], temperature=0.5)
-        for item in proposed.actions[:n_actions]:
-            child = LATSNode(state=item.state.strip(), action=item.action, parent=leaf)
+        for item in proposed.candidates[:n_actions]:
+            child = LATSNode(state=item.state.strip(), action=item.action.strip(), parent=leaf)
             leaf.children.append(child)
             feedback = await environment.evaluate(child.state)
             child.feedback = feedback
             child.environment_score = feedback.score
             value_judgment = llm.with_structured_output(
                 ValueEstimate,
-                method="function_calling",
+                method="json_mode",
             ).invoke([
-                ("system", "You are the LATS value function."),
+                ("system", "You are the LATS value function. Return a JSON with 'score' (float 0-1)."),
                 ("human", f"""Task: {task}
 Candidate state:
 {child.state}
