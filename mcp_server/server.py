@@ -1,94 +1,58 @@
 import os
-import pyodbc
+import sys
+import asyncio
+import json
+import inspect
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-import mcp
-from fastmcp import FastMCP, Context
-from dotenv import load_dotenv
 
+import pyodbc
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ConfigDict
+
+from fastmcp import FastMCP, Context
+import mcp
+
+
+
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
+
+
+from platform.database import (
+    # Tool Registry
+    get_all_tools as db_get_all_tools,
+    get_tools_for_agent as db_get_tools_for_agent,
+    register_tool as db_register_tool,
+    update_tool as db_update_tool,
+    delete_tool as db_delete_tool,
+    get_tool_by_id as db_get_tool_by_id,
+    get_tool_by_name_and_agent,
+    get_agent_tool_names,
+    # HITL
+    create_hitl_task as db_create_hitl_task,
+    resolve_hitl_task as db_resolve_hitl_task,
+    get_hitl_task as db_get_hitl_task,
+    get_pending_hitl_tasks,
+    # Tickets
+    create_ticket as db_create_ticket,
+    resolve_ticket as db_resolve_ticket,
+    get_ticket as db_get_ticket,
+    get_open_tickets,
+    # Checkpoints
+    save_checkpoint as db_save_checkpoint,
+    get_checkpoint as db_get_checkpoint,
+    get_latest_checkpoint as db_get_latest_checkpoint,
+)
 
 load_dotenv()
 
-
-def get_connection_string() -> str:
-    """Build SQL Server connection string from environment variables"""
-    server = os.getenv("WIN_DB_SERVER", "localhost\\SQLEXPRESS")
-    database = os.getenv("WIN_DB_NAME", "HarborstoneInsurance")
-    driver = os.getenv("WIN_DB_DRIVER", "ODBC Driver 18 for SQL Server")
-    auth_type = os.getenv("WIN_DB_AUTH_TYPE", "WINDOWS")
-
-    if auth_type.upper() == "WINDOWS":
-        return (
-            f"DRIVER={{{driver}}};"
-            f"SERVER={server};"
-            f"DATABASE={database};"
-            "Trusted_Connection=yes;"
-            "TrustServerCertificate=yes;"
-        )
-    else:
-        username = os.getenv("WIN_DB_USERNAME", "")
-        password = os.getenv("WIN_DB_PASSWORD", "")
-        return (
-            f"DRIVER={{{driver}}};"
-            f"SERVER={server};"
-            f"DATABASE={database};"
-            f"UID={username};"
-            f"PWD={password};"
-            "TrustServerCertificate=yes;"
-        )
-
-
-@contextmanager
-def get_db():
-    """Database connection context manager for SQL Server"""
-    conn_str = get_connection_string()
-    conn = pyodbc.connect(conn_str)
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-def row_to_dict(cursor, row):
-    """
-    pyodbc.Row does NOT support string-key access (row['col']) -
-    only integer indexing (row[0]) and attribute access (row.col).
-    This converts a fetched row into a plain dict using cursor.description,
-    so the rest of the code can keep using row['col_name'] safely.
-    """
-    if row is None:
-        return None
-    columns = [col[0] for col in cursor.description]
-    return dict(zip(columns, row))
-
-
-def rows_to_dicts(cursor, rows):
-    """Same as row_to_dict, but for a list of rows (e.g. fetchall())."""
-    columns = [col[0] for col in cursor.description]
-    return [dict(zip(columns, row)) for row in rows]
-
-
-def test_connection():
-    """Test database connection"""
-    try:
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT @@VERSION")
-            version = cursor.fetchone()
-            print(f"[OK] Connected to SQL Server: {version[0][:50]}...")
-
-            # Check if data exists
-            cursor.execute("SELECT COUNT(*) FROM Employees")
-            count = cursor.fetchone()[0]
-            print(f"[OK] Employees count: {count}")
-            return True
-    except Exception as e:
-        print(f"[ERROR] Failed to connect to SQL Server: {e}")
-        return False
-
+# ============================================================
+# PYDANTIC MODELS
+# ============================================================
 
 class LoginInput(BaseModel):
     """Login credentials"""
@@ -131,10 +95,122 @@ class AssessRiskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-server = FastMCP("Harborstone Insurance Server")
+# ============================================================
+# DATABASE HELPERS
+# ============================================================
+
+def get_connection_string() -> str:
+    """Build SQL Server connection string from environment variables"""
+    server = os.getenv("WIN_DB_SERVER", "localhost\\SQLEXPRESS")
+    database = os.getenv("WIN_DB_NAME", "HarborstoneInsurance")
+    driver = os.getenv("WIN_DB_DRIVER", "ODBC Driver 18 for SQL Server")
+    auth_type = os.getenv("WIN_DB_AUTH_TYPE", "WINDOWS")
+
+    if auth_type.upper() == "WINDOWS":
+        return (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            "Trusted_Connection=yes;"
+            "TrustServerCertificate=yes;"
+        )
+    else:
+        username = os.getenv("WIN_DB_USERNAME", "")
+        password = os.getenv("WIN_DB_PASSWORD", "")
+        return (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            f"UID={username};"
+            f"PWD={password};"
+            "TrustServerCertificate=yes;"
+        )
+
+
+@contextmanager
+def get_db():
+    """Database connection context manager for SQL Server"""
+    conn_str = get_connection_string()
+    conn = pyodbc.connect(conn_str)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def row_to_dict(cursor, row):
+    """Convert a pyodbc row to dict using cursor.description."""
+    if row is None:
+        return None
+    columns = [col[0] for col in cursor.description]
+    return dict(zip(columns, row))
+
+
+def rows_to_dicts(cursor, rows):
+    """Same as row_to_dict, but for a list of rows."""
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in rows]
+
+
+def test_connection():
+    """Test database connection"""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT @@VERSION")
+            version = cursor.fetchone()
+            print(f"[OK] Connected to SQL Server: {version[0][:50]}...")
+
+            cursor.execute("SELECT COUNT(*) FROM Employees")
+            count = cursor.fetchone()[0]
+            print(f"[OK] Employees count: {count}")
+            return True
+    except Exception as e:
+        print(f"[ERROR] Failed to connect to SQL Server: {e}")
+        return False
+
+
+# ============================================================
+# LIFESPAN (Startup/Shutdown)
+# ============================================================
+
+async def init_mcp_registry():
+    """Initialize the tool registry."""
+    await tool_registry.initialize()
+    print(f"[MCP] Registry initialized with {len(tool_registry.tools_cache)} agents")
+    
+    for agent, tools in tool_registry.tools_cache.items():
+        enabled = [name for name, enabled in tools.items() if enabled]
+        if enabled:
+            print(f"  - {agent}: {', '.join(enabled)}")
+
+
+@asynccontextmanager
+async def lifespan(server_instance):
+    """Lifespan context manager for startup/shutdown events."""
+    print("🚀 Starting MCP Server...")
+    await init_mcp_registry()
+    try:
+        yield
+    finally:
+        print("👋 Shutting down MCP Server...")
+
+
+# ============================================================
+# FAST MCP SERVER INSTANCE (with lifespan)
+# ============================================================
+
+server = FastMCP(
+    "Harborstone Insurance Server",
+    lifespan=lifespan,
+)
 
 current_session = {}
 
+
+# ============================================================
+# MCP RESOURCES
+# ============================================================
 
 @server.resource("underwriting://guidelines")
 def get_guidelines() -> str:
@@ -206,35 +282,23 @@ The letter should be ready for a manager's signature.
 """
 
 
+# ============================================================
+# REAL MCP TOOLS
+# ============================================================
+
 @server.tool
 async def login(username: str, password: str, ctx: Context) -> str:
-    """Authenticate user and create session
-    Triggers tools/list_changed notification based on role"""
-
+    """Authenticate user and create session"""
     global current_session
 
-    # ============================================================
-    # SESSION + NOTIFICATIONS: role determines which tools are visible.
-    # approve_claim is disabled globally by default (see server.disable(...)
-    # near the bottom of this file). Logging in as a privileged role
-    # enables it for THIS session only, which fires a session-scoped
-    # notifications/tools/list_changed the client can react to.
-    # Logging in as a non-privileged role explicitly re-disables it, so
-    # re-login as a different role on the same connection is handled too.
-    #
-    # NOTE: this does not yet verify `password` - the employees table
-    # as queried below has no password column. Add a password_hash
-    # column + verification (e.g. bcrypt) before relying on this for
-    # real authentication.
-    # ============================================================
     privileged_roles = {"Underwriter", "Admin", "Risk Analyst"}
 
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-        SELECT employee_id, username, role_name, full_name
-        FROM employees
-        WHERE username = ? AND is_active = 1
+            SELECT employee_id, username, role_name, full_name
+            FROM employees
+            WHERE username = ? AND is_active = 1
         """, (username,))
         user = row_to_dict(cursor, cursor.fetchone())
 
@@ -257,8 +321,8 @@ async def login(username: str, password: str, ctx: Context) -> str:
             tools_list = "check_claim_status, get_customer_info, get_policy_details, file_claim, assess_risk"
 
         cursor.execute("""
-        INSERT INTO AuditLogs (employee_id, action, table_name, record_id)
-        VALUES (?, 'LOGIN', 'employee', ?)
+            INSERT INTO AuditLogs (employee_id, action, table_name, record_id)
+            VALUES (?, 'LOGIN', 'employee', ?)
         """, (user["employee_id"], user["employee_id"]))
         conn.commit()
 
@@ -276,32 +340,28 @@ async def login(username: str, password: str, ctx: Context) -> str:
 
 @server.tool
 async def check_claim_status(claim_id: int) -> str:
-    """
-    Check the status of a claim.
-    Anyone can check status (read-only).
-    """
-
+    """Check the status of a claim."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-                SELECT 
-                    c.claim_id,
-                    c.claim_number,
-                    c.claim_amount,
-                    c.status,
-                    c.description,
-                    c.claim_date,
-                    c.priority,
-                    c.risk_level,
-                    p.policy_number,
-                    cust.full_name as customer_name,
-                    e.full_name as assigned_to
-                FROM Claims c
-                JOIN InsurancePolicies p ON c.policy_id = p.policy_id
-                JOIN Customers cust ON p.customer_id = cust.customer_id
-                LEFT JOIN Employees e ON c.assigned_employee_id = e.employee_id
-                WHERE c.claim_id = ?
-            """, (claim_id,))
+            SELECT 
+                c.claim_id,
+                c.claim_number,
+                c.claim_amount,
+                c.status,
+                c.description,
+                c.claim_date,
+                c.priority,
+                c.risk_level,
+                p.policy_number,
+                cust.full_name as customer_name,
+                e.full_name as assigned_to
+            FROM Claims c
+            JOIN InsurancePolicies p ON c.policy_id = p.policy_id
+            JOIN Customers cust ON p.customer_id = cust.customer_id
+            LEFT JOIN Employees e ON c.assigned_employee_id = e.employee_id
+            WHERE c.claim_id = ?
+        """, (claim_id,))
         claim = row_to_dict(cursor, cursor.fetchone())
 
         if not claim:
@@ -325,22 +385,21 @@ async def check_claim_status(claim_id: int) -> str:
 @server.tool
 async def get_customer_info(customer_id: int) -> str:
     """Get customer information (read-only)."""
-
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-                SELECT 
-                    customer_id,
-                    customer_code,
-                    full_name,
-                    email,
-                    phone,
-                    city,
-                    country,
-                    status
-                FROM Customers 
-                WHERE customer_id = ?
-            """, (customer_id,))
+            SELECT 
+                customer_id,
+                customer_code,
+                full_name,
+                email,
+                phone,
+                city,
+                country,
+                status
+            FROM Customers 
+            WHERE customer_id = ?
+        """, (customer_id,))
         customer = row_to_dict(cursor, cursor.fetchone())
 
         if not customer:
@@ -361,27 +420,26 @@ async def get_customer_info(customer_id: int) -> str:
 @server.tool
 async def get_policy_details(policy_id: int) -> str:
     """Get policy details (read-only)."""
-
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-                SELECT 
-                    p.policy_id,
-                    p.policy_number,
-                    p.policy_type,
-                    p.coverage_amount,
-                    p.deductible,
-                    p.premium,
-                    p.start_date,
-                    p.end_date,
-                    p.status,
-                    cust.full_name as customer_name,
-                    v.vessel_name
-                FROM InsurancePolicies p
-                JOIN Customers cust ON p.customer_id = cust.customer_id
-                JOIN Vessels v ON p.vessel_id = v.vessel_id
-                WHERE p.policy_id = ?
-            """, (policy_id,))
+            SELECT 
+                p.policy_id,
+                p.policy_number,
+                p.policy_type,
+                p.coverage_amount,
+                p.deductible,
+                p.premium,
+                p.start_date,
+                p.end_date,
+                p.status,
+                cust.full_name as customer_name,
+                v.vessel_name
+            FROM InsurancePolicies p
+            JOIN Customers cust ON p.customer_id = cust.customer_id
+            JOIN Vessels v ON p.vessel_id = v.vessel_id
+            WHERE p.policy_id = ?
+        """, (policy_id,))
         policy = row_to_dict(cursor, cursor.fetchone())
 
         if not policy:
@@ -403,22 +461,18 @@ async def get_policy_details(policy_id: int) -> str:
 
 
 @server.tool
-async def file_claim(policy_id: int, amount: float, description: str, ctx: Context, incident_date: str = "") -> str:
-    """
-    File a new claim.
-    Anyone can file a claim.
-
-    incident_date: when the loss/damage occurred, format YYYY-MM-DD.
-    If not provided, defaults to today's date.
-    """
+async def file_claim(
+    policy_id: int,
+    amount: float,
+    description: str,
+    ctx: Context,
+    incident_date: str = ""
+) -> str:
+    """File a new claim."""
     global current_session
 
-    # ============================================================
-    # PROGRESS TRACKING: Shows progress to the user
-    # ============================================================
     await ctx.report_progress(0, 100, "Starting claim filing...")
 
-    # Validate policy exists
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT policy_id FROM InsurancePolicies WHERE policy_id = ?", (policy_id,))
@@ -427,7 +481,6 @@ async def file_claim(policy_id: int, amount: float, description: str, ctx: Conte
 
     await ctx.report_progress(30, 100, "Generating claim number...")
 
-    # Generate claim number
     claim_number = f"CLM-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
     await ctx.report_progress(60, 100, "Creating claim record...")
@@ -438,10 +491,10 @@ async def file_claim(policy_id: int, amount: float, description: str, ctx: Conte
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-                INSERT INTO Claims 
-                (policy_id, claim_number, claim_amount, description, status, assigned_employee_id, incident_date)
-                VALUES (?, ?, ?, ?, 'Pending', ?, ?)
-            """, (policy_id, claim_number, amount, description, user_id, incident_date_value))
+            INSERT INTO Claims 
+            (policy_id, claim_number, claim_amount, description, status, assigned_employee_id, incident_date)
+            VALUES (?, ?, ?, ?, 'Pending', ?, ?)
+        """, (policy_id, claim_number, amount, description, user_id, incident_date_value))
         conn.commit()
 
         cursor.execute("SELECT SCOPE_IDENTITY()")
@@ -459,12 +512,13 @@ async def file_claim(policy_id: int, amount: float, description: str, ctx: Conte
 
 
 @server.tool
-async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str = "") -> str:
-    """
-    Approve or deny a claim.
-    Requires Underwriter, Risk Analyst, or Admin role.
-    High-value claims (> $10,000) trigger elicitation (human approval).
-    """
+async def approve_claim(
+    claim_id: int,
+    decision: str,
+    ctx: Context,
+    notes: str = ""
+) -> str:
+    """Approve or deny a claim."""
     global current_session
 
     await ctx.report_progress(0, 100, "Starting claim approval...")
@@ -480,14 +534,13 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
     if role not in ["Underwriter", "Admin", "Risk Analyst"]:
         return f"ERROR: {role} cannot approve claims. Requires Underwriter, Risk Analyst, or Admin."
 
-        # Get claim details
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-                SELECT claim_amount, status
-                FROM Claims 
-                WHERE claim_id = ?
-            """, (claim_id,))
+            SELECT claim_amount, status
+            FROM Claims 
+            WHERE claim_id = ?
+        """, (claim_id,))
         claim = row_to_dict(cursor, cursor.fetchone())
 
         if not claim:
@@ -500,7 +553,6 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
 
         await ctx.report_progress(40, 100, f"Claim amount: ${amount:,.2f}")
 
-        # Role-based limits (Defensive Design)
         if role == "Risk Analyst" and amount > 50000:
             return f"ERROR: Risk Analysts can only approve up to $50,000. This claim is ${amount:,.2f}."
 
@@ -544,7 +596,6 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
 
         await ctx.report_progress(80, 100, "Processing decision...")
 
-        # Update claim
         with get_db() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -554,7 +605,6 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
             """, (decision.capitalize(), user_id, claim_id))
             conn.commit()
 
-            # Log the action (Audit Log)
             cursor.execute("""
                 INSERT INTO AuditLogs (employee_id, action, table_name, record_id)
                 VALUES (?, 'CLAIM_APPROVED', 'Claims', ?)
@@ -579,10 +629,7 @@ async def approve_claim(claim_id: int, decision: str, ctx: Context, notes: str =
 
 @server.tool
 async def assess_risk(policy_id: int, ctx: Context) -> str:
-    """
-    Assess risk for a policy using sampling.
-    Calls the client's LLM for AI analysis (SAMPLING protocol concern).
-    """
+    """Assess risk for a policy using sampling."""
     await ctx.report_progress(0, 100, "Starting risk assessment...")
 
     await ctx.report_progress(20, 100, "Fetching policy details...")
@@ -590,21 +637,21 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-                SELECT 
-                    p.policy_number,
-                    p.policy_type,
-                    p.coverage_amount,
-                    p.status,
-                    cust.full_name as customer_name,
-                    v.vessel_name,
-                    v.vessel_type,
-                    v.year_built,
-                    v.insured_value
-                FROM InsurancePolicies p
-                JOIN Customers cust ON p.customer_id = cust.customer_id
-                JOIN Vessels v ON p.vessel_id = v.vessel_id
-                WHERE p.policy_id = ?
-            """, (policy_id,))
+            SELECT 
+                p.policy_number,
+                p.policy_type,
+                p.coverage_amount,
+                p.status,
+                cust.full_name as customer_name,
+                v.vessel_name,
+                v.vessel_type,
+                v.year_built,
+                v.insured_value
+            FROM InsurancePolicies p
+            JOIN Customers cust ON p.customer_id = cust.customer_id
+            JOIN Vessels v ON p.vessel_id = v.vessel_id
+            WHERE p.policy_id = ?
+        """, (policy_id,))
         policy = row_to_dict(cursor, cursor.fetchone())
 
         if not policy:
@@ -612,7 +659,6 @@ async def assess_risk(policy_id: int, ctx: Context) -> str:
 
         await ctx.report_progress(40, 100, "Analyzing policy data...")
 
-        # Calculate basic risk factors
         risk_factors = []
         risk_score = "Low"
         current_year = datetime.now().year
@@ -688,23 +734,315 @@ AI Analysis:
 Recommendation: {"Proceed with caution - requires review" if risk_score == "High" else "Proceed with normal underwriting process"}"""
 
 
-# NOTIFICATIONS: approve_claim is a privileged write tool, so it stays hidden
-# for every connection by default. login() enables it per-session for
-# Underwriter/Risk Analyst/Admin roles, firing notifications/tools/list_changed.
+# ============================================================
+# DEFAULT VISIBILITY - approve_claim is privileged
+# ============================================================
+
 server.disable(names={"approve_claim"}, components={"tool"})
 
-print("=" * 50)
-print("HARBORSTONE INSURANCE MCP SERVER")
-print("=" * 50)
-print()
 
-print("Testing database connection...")
-if not test_connection():
-    print("ERROR: Database connection failed. Exiting.")
-    exit(1)
+# ============================================================
+# TOOL HANDLERS MAP (Real MCP functions only)
+# ============================================================
 
-print()
-transport = os.getenv('TRANSPORT_TYPE', "stdio")
-print(f"[OK] Starting Harborstone Insurance Server with {transport} transport...")
-print()
-server.run(transport=transport)
+TOOL_HANDLERS = {
+    "login": login,
+    "check_claim_status": check_claim_status,
+    "get_customer_info": get_customer_info,
+    "get_policy_details": get_policy_details,
+    "file_claim": file_claim,
+    "approve_claim": approve_claim,
+    "assess_risk": assess_risk,
+}
+
+
+# ============================================================
+# DYNAMIC TOOL REGISTRY
+# ============================================================
+
+class MCPToolRegistry:
+    """
+    Dynamic tool registry that syncs with the database.
+    Admin controls tool permissions from the web UI.
+    """
+    
+    def __init__(self):
+        self.tools_cache = {}  # {agent_name: {tool_name: enabled}}
+        self._initialized = False
+        self._lock = asyncio.Lock()
+    
+    async def initialize(self):
+        """Load tools from database on startup."""
+        if self._initialized:
+            return
+        
+        async with self._lock:
+            if self._initialized:
+                return
+            
+            tools = db_get_all_tools()
+            for tool in tools:
+                agent = tool['agent_name']
+                if agent not in self.tools_cache:
+                    self.tools_cache[agent] = {}
+                self.tools_cache[agent][tool['tool_name']] = tool['enabled']
+            
+            self._initialized = True
+            print(f"[MCP] Loaded tools for {len(self.tools_cache)} agents")
+    
+    async def refresh(self):
+        """Refresh tools from database."""
+        async with self._lock:
+            tools = db_get_all_tools()
+            new_cache = {}
+            for tool in tools:
+                agent = tool['agent_name']
+                if agent not in new_cache:
+                    new_cache[agent] = {}
+                new_cache[agent][tool['tool_name']] = tool['enabled']
+            
+            self.tools_cache = new_cache
+            print(f"[MCP] Refreshed tools for {len(self.tools_cache)} agents")
+    
+    def get_tools_for_agent(self, agent_name: str) -> List[str]:
+        """Get enabled tool names for an agent."""
+        agent_tools = self.tools_cache.get(agent_name, {})
+        return [name for name, enabled in agent_tools.items() if enabled]
+    
+    def is_tool_enabled(self, agent_name: str, tool_name: str) -> bool:
+        """Check if a tool is enabled for an agent."""
+        agent_tools = self.tools_cache.get(agent_name, {})
+        return agent_tools.get(tool_name, False)
+    
+    def has_tool(self, tool_name: str) -> bool:
+        """Check if a tool exists in any agent's registry."""
+        return any(
+            tool_name in tools
+            for tools in self.tools_cache.values()
+        )
+
+
+# ============================================================
+# Create registry instance
+# ============================================================
+
+tool_registry = MCPToolRegistry()
+
+
+# ============================================================
+# MCP TOOL FUNCTIONS 
+# ============================================================
+
+async def list_tools(agent_name: str = None) -> List[Dict]:
+    """
+    Get list of available tools for an agent.
+    If agent_name is provided, returns only tools enabled for that agent.
+    """
+    if agent_name:
+        tool_names = tool_registry.get_tools_for_agent(agent_name)
+        return [
+            {
+                "name": name,
+                "description": TOOL_HANDLERS[name].__doc__ or f"Tool: {name}",
+                "inputSchema": {},
+            }
+            for name in tool_names
+            if name in TOOL_HANDLERS
+        ]
+    
+    all_tools = []
+    for agent, tools in tool_registry.tools_cache.items():
+        for name, enabled in tools.items():
+            if enabled and name in TOOL_HANDLERS:
+                all_tools.append({
+                    "name": name,
+                    "agent": agent,
+                    "description": TOOL_HANDLERS[name].__doc__ or f"Tool: {name}",
+                    "inputSchema": {},
+                })
+    return all_tools
+
+
+async def call_tool(
+    agent_name: str,
+    tool_name: str,
+    arguments: dict,
+    ctx: Optional[Context] = None,
+) -> Dict:
+    """
+    Execute a real MCP tool for a specific agent.
+    The registry controls authorization, while the actual
+    MCP tool implementation performs the operation.
+    """
+    # 1. Check registry permission
+    if not tool_registry.is_tool_enabled(agent_name, tool_name):
+        return {
+            "status": "error",
+            "error": (
+                f"Tool '{tool_name}' is not enabled "
+                f"for agent '{agent_name}'"
+            ),
+        }
+    
+    # 2. Get handler - try TOOL_HANDLERS first, then module
+    handler = TOOL_HANDLERS.get(tool_name)
+    
+    # If not found, try to get from the module directly (for testing)
+    if handler is None:
+        import mcp_server.server as mcp_module
+        handler = getattr(mcp_module, 'TOOL_HANDLERS', {}).get(tool_name)
+    
+    if handler is None:
+        return {
+            "status": "error",
+            "error": f"No handler found for tool '{tool_name}'",
+        }
+    
+    # 3. Execute the real MCP function
+    try:
+        kwargs = dict(arguments)
+        
+        # Check if handler expects a Context parameter
+        signature = inspect.signature(handler)
+        if "ctx" in signature.parameters:
+            if ctx is None:
+                from unittest.mock import MagicMock
+                ctx = MagicMock()
+                ctx.session_id = "test_session"
+            kwargs["ctx"] = ctx
+        
+        result = await handler(**kwargs)
+        
+        return {
+            "status": "success",
+            "result": result,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+        }
+
+
+
+async def get_agent_tools(agent_name: str) -> List[str]:
+    """Get all enabled tool names for an agent."""
+    return tool_registry.get_tools_for_agent(agent_name)
+
+
+def get_all_enabled_tools() -> Dict[str, List[str]]:
+    """Get all enabled tools grouped by agent."""
+    result = {}
+    for agent, tools in tool_registry.tools_cache.items():
+        enabled = [name for name, enabled in tools.items() if enabled]
+        if enabled:
+            result[agent] = enabled
+    return result
+
+
+# ============================================================
+# Admin Functions 
+# ============================================================
+
+async def admin_register_tool(tool_name: str, agent_name: str, enabled: bool = True):
+    """Register a tool for an agent (called from admin UI)."""
+    if tool_name not in TOOL_HANDLERS:
+        return {'error': f"Tool '{tool_name}' not found in TOOL_HANDLERS"}
+    
+    result = db_register_tool(tool_name, agent_name, enabled)
+    await tool_registry.refresh()
+    return result
+
+
+async def admin_update_tool(tool_id: int, enabled: bool):
+    """Update tool status (called from admin UI)."""
+    tool = db_get_tool_by_id(tool_id)
+    if not tool:
+        return {'error': 'Tool not found'}
+    
+    result = db_update_tool(tool_id, enabled)
+    await tool_registry.refresh()
+    return result
+
+
+async def admin_delete_tool(tool_id: int):
+    """Delete a tool (called from admin UI)."""
+    success = db_delete_tool(tool_id)
+    await tool_registry.refresh()
+    return success
+
+
+async def admin_get_agent_tools(agent_name: str) -> List[str]:
+    """Get all enabled tools for an agent from the registry."""
+    return tool_registry.get_tools_for_agent(agent_name)
+
+
+# ============================================================
+# Platform Functions (called from state graphs)
+# ============================================================
+
+def platform_create_hitl(graph_name: str, run_id: str, node_name: str,
+                         state: Dict, assigned_to: str = None, 
+                         priority: str = 'medium') -> Dict:
+    """Create a HITL task (called from state graph)."""
+    return db_create_hitl_task(graph_name, run_id, node_name, state, 
+                               assigned_to, priority)
+
+
+def platform_resolve_hitl(task_id: int, decision: Dict, status: str = 'resolved') -> Dict:
+    """Resolve a HITL task."""
+    return db_resolve_hitl_task(task_id, decision, status)
+
+
+def platform_create_ticket(graph_name: str, run_id: str, node_name: str,
+                           state: Dict, error_message: str,
+                           error_type: str = None,
+                           assigned_to: str = None,
+                           severity: str = 'medium') -> Dict:
+    """Create a ticket (called from state graph)."""
+    return db_create_ticket(graph_name, run_id, node_name, state, 
+                           error_message, error_type, assigned_to, severity)
+
+
+def platform_resolve_ticket(ticket_id: int, status: str, resolution_notes: str) -> Dict:
+    """Resolve a ticket."""
+    return db_resolve_ticket(ticket_id, status, resolution_notes)
+
+
+def platform_save_checkpoint(graph_name: str, run_id: str, node_name: str,
+                             state: Dict) -> Dict:
+    """Save a checkpoint (called from state graph)."""
+    return db_save_checkpoint(graph_name, run_id, node_name, state)
+
+
+def platform_get_checkpoint(graph_name: str, run_id: str, node_name: str) -> Optional[Dict]:
+    """Get a specific checkpoint."""
+    return db_get_checkpoint(graph_name, run_id, node_name)
+
+
+def platform_get_latest_checkpoint(graph_name: str, run_id: str) -> Optional[Dict]:
+    """Get the latest checkpoint for a run."""
+    return db_get_latest_checkpoint(graph_name, run_id)
+
+
+# ============================================================
+# RUN - Only if not in test mode
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 50)
+    print("HARBORSTONE INSURANCE MCP SERVER")
+    print("=" * 50)
+    print()
+
+    print("Testing database connection...")
+    if not test_connection():
+        print("ERROR: Database connection failed. Exiting.")
+        exit(1)
+
+    print()
+    transport = os.getenv('TRANSPORT_TYPE', "stdio")
+    print(f"[OK] Starting Harborstone Insurance Server with {transport} transport...")
+    print()
+    
+    server.run(transport=transport)

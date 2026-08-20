@@ -4,47 +4,60 @@
 
 {% block content %}
 <div class="row">
-    <div class="col-md-3">
+    <!-- Agents Sidebar -->
+    <div class="col-md-3 col-lg-2">
         <div class="card">
             <div class="card-header bg-primary text-white">
                 <i class="fas fa-robot me-2"></i>Agents
             </div>
-            <div class="card-body">
-                <div class="list-group agent-switcher" id="agent-list">
-                    <button class="list-group-item list-group-item-action active" data-agent="appeal">
-                        <i class="fas fa-gavel me-2"></i>Appeal Agent
-                    </button>
-                    <button class="list-group-item list-group-item-action" data-agent="renewal">
-                        <i class="fas fa-sync-alt me-2"></i>Renewal Agent
-                    </button>
-                    <button class="list-group-item list-group-item-action" data-agent="fraud">
-                        <i class="fas fa-search me-2"></i>Fraud Agent
-                    </button>
+            <div class="card-body p-0">
+                <div class="list-group list-group-flush agent-switcher" id="agent-list">
+                    <div class="text-center py-3">
+                        <span class="spinner-border spinner-border-sm me-2"></span>Loading agents...
+                    </div>
                 </div>
-                <hr>
-                <div class="text-muted small"><i class="fas fa-info-circle me-1"></i>Select an agent to start chatting</div>
+            </div>
+            <div class="card-footer bg-transparent">
+                <div class="text-muted small">
+                    <i class="fas fa-info-circle me-1"></i>
+                    <span id="agent-status">Select an agent to start chatting</span>
+                </div>
             </div>
         </div>
     </div>
 
-    <div class="col-md-9">
-        <div class="card">
-            <div class="card-header bg-white">
-                <span id="current-agent-name"><i class="fas fa-gavel me-2"></i>Appeal Agent</span>
-                <span class="badge bg-success float-end">Online</span>
+    <!-- Chat Area -->
+    <div class="col-md-9 col-lg-10">
+        <div class="card h-100">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <span id="current-agent-name">
+                    <i class="fas fa-comment-dots me-2"></i>
+                    <span id="current-agent-label">Select an agent</span>
+                </span>
+                <span>
+                    <span class="badge bg-success" id="agent-status-badge">● Online</span>
+                    <span class="badge bg-secondary" id="tools-count-badge">0 tools</span>
+                </span>
             </div>
-            <div class="card-body">
-                <div id="chat-box">
-                    <div class="text-center text-muted py-5">
-                        <i class="fas fa-comment-dots fa-3x mb-3 d-block"></i>
-                        <p>Select an agent and start a conversation</p>
-                    </div>
+            
+            <div class="card-body chat-container" id="chat-box" style="height: 450px; overflow-y: auto; background: #f8f9fa;">
+                <div class="text-center text-muted py-5" id="chat-placeholder">
+                    <i class="fas fa-comment-dots fa-4x mb-3 d-block text-primary opacity-50"></i>
+                    <h5>Select an agent to start chatting</h5>
+                    <p class="small">Choose from the sidebar to begin your conversation</p>
                 </div>
-                <div class="input-group mt-3">
-                    <input type="text" class="form-control" id="message-input" placeholder="Type your message...">
-                    <button class="btn btn-primary" id="send-button">
+            </div>
+            
+            <div class="card-footer bg-white">
+                <div class="input-group">
+                    <input type="text" class="form-control" id="message-input" 
+                           placeholder="Type your message..." disabled>
+                    <button class="btn btn-primary" id="send-button" disabled>
                         <i class="fas fa-paper-plane"></i> Send
                     </button>
+                </div>
+                <div class="mt-2 small text-muted">
+                    <i class="fas fa-keyboard me-1"></i>Press Enter to send
                 </div>
             </div>
         </div>
@@ -54,76 +67,407 @@
 
 {% block scripts %}
 <script>
-    let currentAgent = 'appeal';
-    let agentNames = {'appeal': 'Appeal Agent', 'renewal': 'Renewal Agent', 'fraud': 'Fraud Agent'};
-    let agentIcons = {'appeal': 'fa-gavel', 'renewal': 'fa-sync-alt', 'fraud': 'fa-search'};
+    // ============================================================
+    // STATE
+    // ============================================================
 
-    document.querySelectorAll('#agent-list button').forEach(btn => {
-        btn.addEventListener('click', function() {
-            document.querySelectorAll('#agent-list button').forEach(b => b.classList.remove('active'));
-            this.classList.add('active');
-            currentAgent = this.dataset.agent;
-            document.getElementById('current-agent-name').innerHTML =
-                `<i class="fas ${agentIcons[currentAgent]} me-2"></i>${agentNames[currentAgent]}`;
-            document.getElementById('chat-box').innerHTML = `
-                <div class="text-center text-muted py-3">
-                    <i class="fas ${agentIcons[currentAgent]} fa-2x mb-2 d-block"></i>
-                    <p>Chatting with <strong>${agentNames[currentAgent]}</strong></p>
-                </div>
-            `;
-            document.getElementById('message-input').focus();
-        });
-    });
+    let currentAgent = null;
+    let sessionId = null;
+    let agentData = {};
+    let isFirstLoad = true;
 
-    document.getElementById('send-button').addEventListener('click', sendMessage);
-    document.getElementById('message-input').addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') sendMessage();
-    });
-
-    async function sendMessage() {
-        const input = document.getElementById('message-input');
-        const message = input.value.trim();
-        if (!message) return;
-
-        const chatBox = document.getElementById('chat-box');
-        chatBox.innerHTML += `<div class="user-message"><i class="fas fa-user me-2"></i>${escapeHtml(message)}</div>`;
-        input.value = '';
-        chatBox.scrollTop = chatBox.scrollHeight;
-
-        const loadingId = 'loading-' + Date.now();
-        chatBox.innerHTML += `
-            <div id="${loadingId}" class="agent-message">
-                <span class="agent-name"><i class="fas ${agentIcons[currentAgent]} me-1"></i>${agentNames[currentAgent]}</span><br>
-                <span class="spinner-border spinner-border-sm me-2" role="status"></span> Thinking...
-            </div>
-        `;
-        chatBox.scrollTop = chatBox.scrollHeight;
-
-        try {
-            const response = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ agent: currentAgent, message: message })
-            });
-            const data = await response.json();
-            document.getElementById(loadingId).remove();
-            chatBox.innerHTML += `
-                <div class="agent-message">
-                    <span class="agent-name"><i class="fas ${agentIcons[currentAgent]} me-1"></i>${agentNames[currentAgent]}</span><br>
-                    ${escapeHtml(data.reply)}
-                </div>
-            `;
-            chatBox.scrollTop = chatBox.scrollHeight;
-        } catch (error) {
-            document.getElementById(loadingId).remove();
-            chatBox.innerHTML += `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle me-2"></i>Error: ${error.message}</div>`;
-        }
-    }
+    // ============================================================
+    // ESCAPE HTML - Prevent XSS
+    // ============================================================
 
     function escapeHtml(text) {
+        if (!text) return '';
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML.replace(/\n/g, '<br>');
     }
+
+    // ============================================================
+    // LOAD AGENTS
+    // ============================================================
+
+    async function loadAgents(keepSelection = false) {
+        try {
+            const response = await fetch('/api/agents');
+            const data = await response.json();
+            
+            const container = document.getElementById('agent-list');
+            
+            if (!data.agents || data.agents.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-muted py-3">
+                        <i class="fas fa-exclamation-circle me-1"></i>
+                        No agents available
+                    </div>
+                `;
+                return;
+            }
+            
+            // Store agent data
+            const previousAgent = currentAgent;
+            data.agents.forEach(agent => {
+                agentData[agent.id] = agent;
+            });
+            
+            // Rebuild agent list
+            container.innerHTML = '';
+            data.agents.forEach(agent => {
+                const btn = document.createElement('button');
+                btn.className = 'list-group-item list-group-item-action';
+                btn.dataset.agent = agent.id;
+                
+                const iconMap = {
+                    'appeal': 'fa-gavel',
+                    'renewal': 'fa-sync-alt',
+                    'fraud': 'fa-search',
+                    'memory_rag': 'fa-database',
+                    'planning': 'fa-tasks'
+                };
+                const icon = iconMap[agent.id] || 'fa-robot';
+                
+                btn.innerHTML = `
+                    <div class="d-flex align-items-center">
+                        <i class="fas ${icon} me-2 text-primary"></i>
+                        <div class="flex-grow-1 text-start">
+                            <strong>${escapeHtml(agent.name)}</strong>
+                            <br>
+                            <small class="text-muted">${escapeHtml(agent.description || '')}</small>
+                        </div>
+                        ${agent.tools && agent.tools.length > 0 ? 
+                            `<span class="badge bg-secondary rounded-pill">${agent.tools.length}</span>` : ''
+                        }
+                    </div>
+                `;
+                
+                btn.onclick = () => selectAgent(agent.id);
+                container.appendChild(btn);
+            });
+            
+            // Restore selection or select first
+            if (keepSelection && previousAgent && agentData[previousAgent]) {
+                selectAgent(previousAgent);
+            } else if (data.agents.length > 0 && isFirstLoad) {
+                isFirstLoad = false;
+                selectAgent(data.agents[0].id);
+            }
+            
+        } catch(e) {
+            document.getElementById('agent-list').innerHTML = `
+                <div class="text-danger p-3">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    Error loading agents: ${escapeHtml(e.message)}
+                </div>
+            `;
+        }
+    }
+
+    // ============================================================
+    // SELECT AGENT
+    // ============================================================
+
+    function selectAgent(agentId) {
+        currentAgent = agentId;
+        sessionId = null;
+        
+        // Update UI - agent list
+        document.querySelectorAll('#agent-list .list-group-item').forEach(el => {
+            el.classList.remove('active');
+            if (el.dataset.agent === agentId) {
+                el.classList.add('active');
+            }
+        });
+        
+        // Update header - preserve the label span
+        const agent = agentData[agentId];
+        if (agent) {
+            const iconMap = {
+                'appeal': 'fa-gavel',
+                'renewal': 'fa-sync-alt',
+                'fraud': 'fa-search',
+                'memory_rag': 'fa-database',
+                'planning': 'fa-tasks'
+            };
+            const icon = iconMap[agentId] || 'fa-robot';
+            
+            // Use textContent for the label to preserve the span
+            const labelSpan = document.getElementById('current-agent-label');
+            if (labelSpan) {
+                labelSpan.textContent = agent.name;
+            }
+            
+            // Update icon separately
+            const nameSpan = document.getElementById('current-agent-name');
+            if (nameSpan) {
+                const iconElement = nameSpan.querySelector('.fa-comment-dots');
+                if (iconElement) {
+                    iconElement.className = `fas ${icon} me-2`;
+                }
+            }
+            
+            // Update status
+            const toolsCount = agent.tools ? agent.tools.length : 0;
+            document.getElementById('tools-count-badge').textContent = `${toolsCount} tools`;
+            document.getElementById('agent-status').textContent = 
+                `${agent.name} - ${toolsCount} tools available`;
+        }
+        
+        // Clear chat but keep placeholder
+        const chatBox = document.getElementById('chat-box');
+        chatBox.innerHTML = `
+            <div class="text-center text-muted py-5" id="chat-placeholder">
+                <i class="fas fa-comment-dots fa-4x mb-3 d-block text-primary opacity-50"></i>
+                <h5>Chatting with ${escapeHtml(agent?.name || agentId)}</h5>
+                <p class="small">Start typing your message below</p>
+            </div>
+        `;
+        
+        // Enable chat
+        document.getElementById('message-input').disabled = false;
+        document.getElementById('send-button').disabled = false;
+        document.getElementById('message-input').placeholder = `Message ${agent?.name || 'agent'}...`;
+        document.getElementById('message-input').focus();
+    }
+
+    // ============================================================
+    // SEND MESSAGE
+    // ============================================================
+
+    async function sendMessage() {
+        const input = document.getElementById('message-input');
+        const message = input.value.trim();
+        
+        if (!message || !currentAgent) return;
+        
+        input.value = '';
+        input.disabled = true;
+        document.getElementById('send-button').disabled = true;
+        
+        // Add user message to chat
+        addMessage('user', message);
+        
+        // Show loading indicator
+        const loadingId = 'loading-' + Date.now();
+        const chatBox = document.getElementById('chat-box');
+        chatBox.innerHTML += `
+            <div id="${loadingId}" class="message message-agent">
+                <div class="message-content">
+                    <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                    Thinking...
+                </div>
+            </div>
+        `;
+        chatBox.scrollTop = chatBox.scrollHeight;
+        
+        try {
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    agent: currentAgent,
+                    message: message,
+                    session_id: sessionId
+                })
+            });
+            
+            const data = await response.json();
+            
+            // Remove loading indicator
+            document.getElementById(loadingId)?.remove();
+            
+            // Save session ID if provided
+            if (data.session_id) {
+                sessionId = data.session_id;
+            }
+            
+            // Add agent reply
+            const reply = data.reply || data.response || 'No response from agent';
+            addMessage('agent', reply);
+            
+        } catch(error) {
+            document.getElementById(loadingId)?.remove();
+            addMessage('system', `❌ Error: ${escapeHtml(error.message)}`);
+        }
+        
+        input.disabled = false;
+        document.getElementById('send-button').disabled = false;
+        input.focus();
+    }
+
+    // ============================================================
+    // ADD MESSAGE
+    // ============================================================
+
+    function addMessage(type, text) {
+        const chatBox = document.getElementById('chat-box');
+        
+        // Remove placeholder if exists
+        const placeholder = chatBox.querySelector('#chat-placeholder');
+        if (placeholder) placeholder.remove();
+        
+        const div = document.createElement('div');
+        div.className = `message message-${type}`;
+        
+        // Get agent info for icon
+        const agent = agentData[currentAgent];
+        const iconMap = {
+            'appeal': 'fa-gavel',
+            'renewal': 'fa-sync-alt',
+            'fraud': 'fa-search',
+            'memory_rag': 'fa-database',
+            'planning': 'fa-tasks'
+        };
+        const icon = iconMap[currentAgent] || 'fa-robot';
+        const agentName = agent?.name || currentAgent;
+        
+        if (type === 'user') {
+            div.innerHTML = `
+                <div class="message-content user-message">
+                    <i class="fas fa-user me-2"></i>
+                    ${escapeHtml(text)}
+                </div>
+            `;
+        } else if (type === 'agent') {
+            div.innerHTML = `
+                <div class="message-content agent-message">
+                    <div class="agent-header">
+                        <i class="fas ${icon} me-1"></i>
+                        <strong>${escapeHtml(agentName)}</strong>
+                    </div>
+                    <div class="agent-body">${escapeHtml(text)}</div>
+                </div>
+            `;
+        } else {
+            div.innerHTML = `
+                <div class="message-content system-message">
+                    <i class="fas fa-info-circle me-2"></i>
+                    ${escapeHtml(text)}
+                </div>
+            `;
+        }
+        
+        // Add inline styles
+        const styles = {
+            'user': `
+                margin-bottom: 12px;
+                display: flex;
+                justify-content: flex-end;
+            `,
+            'agent': `
+                margin-bottom: 12px;
+                display: flex;
+                justify-content: flex-start;
+            `,
+            'system': `
+                margin: 8px auto;
+                text-align: center;
+                max-width: 80%;
+            `
+        };
+        
+        div.style.cssText = styles[type] || styles.system;
+        
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    // ============================================================
+    // KEYBOARD SHORTCUTS
+    // ============================================================
+
+    document.getElementById('message-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    document.getElementById('send-button').addEventListener('click', sendMessage);
+
+    // ============================================================
+    // INIT - No auto-refresh that clears chat
+    // ============================================================
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadAgents(false);
+    });
 </script>
+
+<!-- Custom Styles -->
+<style>
+    .chat-container {
+        background: #f8f9fa;
+        padding: 16px;
+    }
+    
+    .message {
+        animation: fadeIn 0.3s ease;
+    }
+    
+    .message-content {
+        padding: 8px 14px;
+        border-radius: 12px;
+        max-width: 85%;
+        word-wrap: break-word;
+    }
+    
+    .user-message {
+        background: #007bff;
+        color: white;
+        border-bottom-right-radius: 4px;
+    }
+    
+    .agent-message {
+        background: white;
+        color: #333;
+        border: 1px solid #e0e0e0;
+        border-bottom-left-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    
+    .agent-header {
+        font-size: 0.85em;
+        color: #6c757d;
+        border-bottom: 1px solid #f0f0f0;
+        padding-bottom: 4px;
+        margin-bottom: 6px;
+    }
+    
+    .agent-body {
+        padding: 2px 0;
+    }
+    
+    .system-message {
+        background: #fff3cd;
+        color: #856404;
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-size: 0.9em;
+        display: inline-block;
+    }
+    
+    .list-group-item.active {
+        background: #007bff;
+        border-color: #007bff;
+        color: white;
+    }
+    
+    .list-group-item.active small {
+        color: rgba(255,255,255,0.8) !important;
+    }
+    
+    .list-group-item.active .badge {
+        background: rgba(255,255,255,0.3) !important;
+        color: white !important;
+    }
+    
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+</style>
 {% endblock %}

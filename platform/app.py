@@ -1,7 +1,6 @@
 # platform/app.py
 """Harborstone Insurance Platform - Main Application."""
 
-
 import sys
 from pathlib import Path
 
@@ -12,29 +11,66 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from platform.database import get_connection
-from platform.hitl import (
-    get_hitl_task, list_pending_hitl, resolve_hitl_task
+# Import from platform modules
+from platform.database import (
+    get_connection,
+    # HITL
+    get_pending_hitl_tasks,
+    get_hitl_task,
+    resolve_hitl_task,
+    create_hitl_task,
+    # Tickets
+    get_open_tickets,
+    get_ticket,
+    resolve_ticket,
+    create_ticket,
+    # Tools
+    get_all_tools,
+    get_tools_for_agent,
+    register_tool,
+    update_tool,
+    delete_tool,
+    # Documents
+    get_all_documents,
+    add_document,
+    update_document_status,
+    delete_document,
+    # Checkpoints
+    save_checkpoint,
+    get_checkpoint,
+    get_latest_checkpoint,
 )
-from platform.tickets import (
-    get_ticket, list_open_tickets, resolve_ticket
+
+from platform.models import (
+    ChatRequest,
+    ChatResponse,
+    ToolToggle,
+    RAGDocument,
+    ToolRegistryCreate,
+    ToolRegistryUpdate,
+    HITLTaskCreate,
+    HITLResolution,
+    TicketCreate,
+    TicketResolution,
+    APIResponse,
+    AgentInfo,
+    AgentListResponse,
 )
-from platform.models import ChatRequest, ChatResponse, ToolToggle, RAGDocument
 
 load_dotenv(project_root / ".env")
 
 app = FastAPI(title="Harborstone Insurance Platform")
 
+# Mount static files
 app.mount("/static", StaticFiles(directory="platform/static"), name="static")
 
-# Create Jinja2 environment with caching disabled
+# Create Jinja2 environment
 jinja_env = Environment(
     loader=FileSystemLoader("platform/templates"),
     autoescape=select_autoescape(['html', 'xml']),
-    cache_size=0,          # Disable cache to fix unhashable dict issue
+    cache_size=0,
     auto_reload=True
 )
 
@@ -43,150 +79,388 @@ def render_template(template_name: str, context: dict) -> str:
     template = jinja_env.get_template(template_name)
     return template.render(**context)
 
+
 # ============================================================
 # USER ROUTES
 # ============================================================
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    """Home page - user chat interface."""
     html = render_template("index.html", {"request": request})
     return HTMLResponse(content=html)
 
-@app.post("/api/chat")
-async def chat(request: ChatRequest):
-    # MOCK reply - Person B will replace this
-    mock_replies = {
-        "appeal": f"I'll help you appeal that claim. Processing: '{request.message}'",
-        "renewal": f"I'm checking the policy renewal. Processing: '{request.message}'",
-        "fraud": f"Investigating fraud claim. Processing: '{request.message}'",
-    }
-    reply = mock_replies.get(request.agent, f"Hello! How can I help?")
-    return ChatResponse(reply=reply, agent=request.agent)
-
-@app.get("/api/agents")
-async def list_agents():
-    return [
-        {"id": "appeal", "name": "Appeal Agent", "description": "Handle claim appeals"},
-        {"id": "renewal", "name": "Renewal Agent", "description": "Policy renewal assessments"},
-        {"id": "fraud", "name": "Fraud Agent", "description": "Fraud investigation"},
-    ]
-
-# ============================================================
-# ADMIN ROUTES
-# ============================================================
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request):
+    """Admin dashboard."""
     html = render_template("admin.html", {"request": request})
     return HTMLResponse(content=html)
 
-# Tools Management
+
+@app.get("/api/agents")
+async def list_agents():
+    """List all available agents with their tools."""
+    agents = [
+        {
+            "id": "appeal",
+            "name": "Appeal Agent",
+            "description": "Handle claim appeals with HITL",
+            "type": "state_graph"
+        },
+        {
+            "id": "renewal",
+            "name": "Renewal Agent",
+            "description": "Policy renewal assessments with RAG",
+            "type": "state_graph"
+        },
+        {
+            "id": "fraud",
+            "name": "Fraud Agent",
+            "description": "Fraud investigation with LATS",
+            "type": "state_graph"
+        },
+        {
+            "id": "memory_rag",
+            "name": "Memory & RAG Agent",
+            "description": "Front-desk triage and clinical policy",
+            "type": "rag"
+        },
+        {
+            "id": "planning",
+            "name": "Planning Agent",
+            "description": "Decomposition and planning",
+            "type": "planning"
+        },
+    ]
+
+    # Get tools for each agent from database
+    for agent in agents:
+        try:
+            tools = get_tools_for_agent(agent["name"], enabled_only=True)
+            agent["tools"] = [t["tool_name"] for t in tools]
+        except:
+            agent["tools"] = []
+
+    return {"agents": agents, "total": len(agents)}
+
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest):
+    """
+    Chat endpoint - routes to the appropriate agent.
+    Person B will replace this with actual agent integration.
+    """
+    # TODO: Person B - Integrate with real agents
+    # This is a placeholder that uses the database to check if agent exists
+
+    # Check if agent has tools enabled
+    tools = get_tools_for_agent(request.agent, enabled_only=True)
+
+    if not tools:
+        return ChatResponse(
+            reply=f"Agent '{request.agent}' has no tools enabled. Please contact admin.",
+            agent=request.agent
+        )
+
+    # Mock reply - Person B will replace this
+    mock_replies = {
+        "appeal": f"🔍 I'll help you appeal that claim. Your message: '{request.message}'\n\nAvailable tools: {[t['tool_name'] for t in tools]}",
+        "renewal": f"📋 I'm checking the policy renewal. Your message: '{request.message}'\n\nAvailable tools: {[t['tool_name'] for t in tools]}",
+        "fraud": f"🕵️ Investigating fraud claim. Your message: '{request.message}'\n\nAvailable tools: {[t['tool_name'] for t in tools]}",
+        "memory_rag": f"📚 I'll search through our documents. Your message: '{request.message}'",
+        "planning": f"📊 I'll plan this for you. Your message: '{request.message}'",
+    }
+
+    reply = mock_replies.get(request.agent, f"Hello! How can I help with '{request.message}'?")
+
+    return ChatResponse(reply=reply, agent=request.agent)
+
+
+# ============================================================
+# TOOLS MANAGEMENT ROUTES
+# ============================================================
+
 @app.get("/api/admin/tools")
 async def get_tools():
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT tool_name, agent_name, enabled 
-            FROM PlatformToolRegistry
-            ORDER BY agent_name, tool_name
-        """)
-        rows = cursor.fetchall()
-        return [{
-            "tool_name": r[0],
-            "agent_name": r[1],
-            "enabled": bool(r[2]),
-        } for r in rows]
+    """Get all tool registry entries."""
+    try:
+        tools = get_all_tools()
+        return APIResponse(status="success", data=tools)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
 
-@app.post("/api/admin/tools/toggle")
-async def toggle_tool(data: ToolToggle):
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE PlatformToolRegistry
-            SET enabled = ?, updated_at = GETDATE()
-            WHERE tool_name = ? AND agent_name = ?
-        """, (1 if data.enabled else 0, data.tool_name, data.agent_name))
-        conn.commit()
-        return {"status": "updated"}
 
-# RAG Documents Management
+@app.get("/api/admin/tools/agent/{agent_name}")
+async def get_agent_tools(agent_name: str, enabled_only: bool = True):
+    """Get tools for a specific agent."""
+    try:
+        tools = get_tools_for_agent(agent_name, enabled_only)
+        return APIResponse(status="success", data={
+            "agent": agent_name,
+            "tools": tools,
+            "total": len(tools)
+        })
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+@app.post("/api/admin/tools")
+async def register_tool_endpoint(data: ToolRegistryCreate):
+    """Register a tool for an agent."""
+    try:
+        result = register_tool(data.tool_name, data.agent_name, data.enabled)
+        return APIResponse(status="success", data=result)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+@app.put("/api/admin/tools/{tool_id}")
+async def update_tool_endpoint(tool_id: int, data: ToolRegistryUpdate):
+    """Update a tool's status."""
+    try:
+        result = update_tool(tool_id, data.enabled)
+        return APIResponse(status="success", data=result)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+@app.delete("/api/admin/tools/{tool_id}")
+async def delete_tool_endpoint(tool_id: int):
+    """Delete a tool registry entry."""
+    try:
+        success = delete_tool(tool_id)
+        if success:
+            return APIResponse(status="success", data={"deleted": True})
+        return APIResponse(status="error", error="Tool not found")
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+# ============================================================
+# RAG DOCUMENTS ROUTES
+# ============================================================
+
 @app.get("/api/admin/documents")
-async def get_documents():
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name, source, active, added_at FROM PlatformRAGDocuments ORDER BY added_at DESC")
-        rows = cursor.fetchall()
-        return [{
-            "id": r[0],
-            "name": r[1],
-            "source": r[2],
-            "active": bool(r[3]),
-            "added_at": r[4],
-        } for r in rows]
+async def get_documents(active_only: bool = True):
+    """Get all RAG documents."""
+    try:
+        docs = get_all_documents(active_only)
+        return APIResponse(status="success", data=docs)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
 
 @app.post("/api/admin/documents")
-async def add_document(data: RAGDocument):
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO PlatformRAGDocuments (name, content, source, active)
-            VALUES (?, ?, ?, ?)
-        """, (data.name, data.content, data.source, 1 if data.active else 0))
-        conn.commit()
-        cursor.execute("SELECT SCOPE_IDENTITY()")
-        return {"id": int(cursor.fetchone()[0]), "status": "added"}
+async def add_document_endpoint(data: RAGDocument):
+    """Add a new RAG document."""
+    try:
+        result = add_document(data.name, data.content, data.source, data.active)
+        return APIResponse(status="success", data=result)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+@app.put("/api/admin/documents/{doc_id}")
+async def update_document_status_endpoint(doc_id: int, request: Request):
+    """
+    Update a document's status.
+    Accepts either query parameter ?active=false or JSON body {"active": false}
+    """
+    try:
+        # Try to get from query parameter first
+        query_params = dict(request.query_params)
+        if "active" in query_params:
+            active = query_params["active"].lower() == "true"
+        else:
+            # Try to get from JSON body
+            data = await request.json()
+            active = data.get("active")
+            if active is None:
+                return APIResponse(status="error", error="active field required")
+
+        result = update_document_status(doc_id, active)
+        return APIResponse(status="success", data=result)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
 
 @app.delete("/api/admin/documents/{doc_id}")
-async def delete_document(doc_id: int):
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE PlatformRAGDocuments
-            SET active = 0, updated_at = GETDATE()
-            WHERE id = ?
-        """, (doc_id,))
-        conn.commit()
-        return {"status": "deleted"}
+async def delete_document_endpoint(doc_id: int):
+    """Delete a document (soft delete)."""
+    try:
+        success = delete_document(doc_id)
+        if success:
+            return APIResponse(status="success", data={"deleted": True})
+        return APIResponse(status="error", error="Document not found")
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
 
-# HITL Tasks
+
+# ============================================================
+# HITL ROUTES
+# ============================================================
+
 @app.get("/api/admin/hitl")
 async def get_hitl_tasks():
-    return list_pending_hitl()
+    """Get all pending HITL tasks."""
+    try:
+        tasks = get_pending_hitl_tasks()
+        return APIResponse(status="success", data={"tasks": tasks, "total": len(tasks)})
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
 
 @app.get("/api/admin/hitl/{task_id}")
 async def get_hitl_task_detail(task_id: int):
-    task = get_hitl_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    """Get a specific HITL task."""
+    try:
+        task = get_hitl_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return APIResponse(status="success", data=task)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
 
 @app.post("/api/admin/hitl/{task_id}/resolve")
-async def resolve_hitl_endpoint(task_id: int, decision: dict = {"action": "approved"}):
+async def resolve_hitl_endpoint(task_id: int, resolution: HITLResolution):
+    """Resolve a HITL task."""
     try:
-        resolve_hitl_task(task_id, decision)
-        return {"status": "resolved", "task_id": task_id, "decision": decision}
+        result = resolve_hitl_task(
+            task_id,
+            resolution.decision,
+            resolution.status,
+            resolution.notes  # ← Pass notes to database
+        )
+        return APIResponse(status="success", data=result)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return APIResponse(status="error", error=str(e))
 
-# Tickets
+
+@app.post("/api/hitl")  # Called by state graphs
+async def create_hitl_task_endpoint(data: HITLTaskCreate):
+    """Create a new HITL task (called from state graphs)."""
+    try:
+        result = create_hitl_task(
+            data.graph_name,
+            data.run_id,
+            data.node_name,
+            data.state,
+            data.assigned_to,
+            data.priority
+        )
+        return APIResponse(status="success", data=result)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+# ============================================================
+# TICKET ROUTES
+# ============================================================
+
 @app.get("/api/admin/tickets")
 async def get_tickets():
-    return list_open_tickets()
+    """Get all open tickets."""
+    try:
+        tickets = get_open_tickets()
+        return APIResponse(status="success", data={"tickets": tickets, "total": len(tickets)})
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
 
 @app.get("/api/admin/tickets/{ticket_id}")
 async def get_ticket_detail(ticket_id: int):
-    ticket = get_ticket(ticket_id)
-    if not ticket:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-    return ticket
+    """Get a specific ticket."""
+    try:
+        ticket = get_ticket(ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        return APIResponse(status="success", data=ticket)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
 
 @app.post("/api/admin/tickets/{ticket_id}/resolve")
-async def resolve_ticket_endpoint(ticket_id: int):
+async def resolve_ticket_endpoint(ticket_id: int, resolution: TicketResolution):
+    """Resolve a ticket."""
     try:
-        resolve_ticket(ticket_id)
-        return {"status": "resolved", "ticket_id": ticket_id}
+        result = resolve_ticket(ticket_id, resolution.status, resolution.resolution_notes)
+        return APIResponse(status="success", data=result)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return APIResponse(status="error", error=str(e))
+
+
+@app.post("/api/tickets")  # Called by state graphs
+async def create_ticket_endpoint(data: TicketCreate):
+    """Create a new ticket (called from state graphs)."""
+    try:
+        result = create_ticket(
+            data.graph_name,
+            data.run_id,
+            data.node_name,
+            data.state,
+            data.error_message,
+            data.error_type,
+            data.assigned_to,
+            data.severity
+        )
+        return APIResponse(status="success", data=result)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+# ============================================================
+# CHECKPOINT ROUTES
+# ============================================================
+
+@app.post("/api/checkpoints")
+async def save_checkpoint_endpoint(request: Request):
+    """Save a checkpoint (called from state graphs)."""
+    try:
+        data = await request.json()
+        result = save_checkpoint(
+            data.get("graph_name"),
+            data.get("run_id"),
+            data.get("node_name"),
+            data.get("state", {})
+        )
+        return APIResponse(status="success", data=result)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+@app.get("/api/checkpoints/{graph_name}/{run_id}/latest")
+async def get_latest_checkpoint_endpoint(graph_name: str, run_id: str):
+    """Get the latest checkpoint for a run."""
+    try:
+        checkpoint = get_latest_checkpoint(graph_name, run_id)
+        if not checkpoint:
+            raise HTTPException(status_code=404, detail="No checkpoint found")
+        return APIResponse(status="success", data=checkpoint)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+@app.get("/api/checkpoints/{graph_name}/{run_id}/{node_name}")
+async def get_checkpoint_endpoint(graph_name: str, run_id: str, node_name: str):
+    """Get a specific checkpoint."""
+    try:
+        checkpoint = get_checkpoint(graph_name, run_id, node_name)
+        if not checkpoint:
+            raise HTTPException(status_code=404, detail="Checkpoint not found")
+        return APIResponse(status="success", data=checkpoint)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
 
 # ============================================================
 # RUN
