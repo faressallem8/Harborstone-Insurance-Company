@@ -289,4 +289,53 @@ VALUES
 (19,5,180000,'Credit Card','2026-07-12','Paid','TXN019'),
 (20,5,270000,'Bank Transfer','2026-08-12','Paid','TXN020');
 
+INSERT INTO PlatformToolRegistry (tool_name, agent_name, enabled)
+VALUES
+    ('check_claim_status', 'Appeal Agent', 1),
+    ('get_policy_details', 'Appeal Agent', 1),
+    ('get_customer_info', 'Appeal Agent', 1),
+    ('approve_claim', 'Appeal Agent', 1),
 
+    ('check_claim_status', 'Renewal Agent', 1),
+    ('get_policy_details', 'Renewal Agent', 1),
+    ('get_customer_info', 'Renewal Agent', 1),
+    ('assess_risk', 'Renewal Agent', 1),
+
+    ('check_claim_status', 'Fraud Agent', 1),
+    ('get_policy_details', 'Fraud Agent', 1),
+    ('get_customer_info', 'Fraud Agent', 1),
+    ('approve_claim', 'Fraud Agent', 1);
+
+
+INSERT INTO PlatformRAGDocuments (name, content, source, active)
+VALUES (
+    'Harborstone Underwriting Manual',
+    'HARBORSTONE INSURANCE – MARINE UNDERWRITING & CLAIMS MANUAL
+Version 4.2 (Effective: Jan 2025)
+
+SECTION 1: GENERAL UNDERWRITING GUIDELINES
+1.1 Eligibility: All vessels must be registered and seaworthy. Vessels over 25 years old require a special survey.
+1.2 Coverage Limits: Standard policies cover up to $250,000. Excess coverage requires board approval.
+1.3 Deductibles:
+  - Vessels < 10 years old: $500 deductible.
+  - Vessels 10–20 years old: $1,000 deductible.
+  - Vessels > 20 years old: $2,500 deductible.
+1.4 Premium Basis: 1.5% of insured value for pleasure craft; 2.5% for commercial fishing vessels.
+
+SECTION 2: RISK ASSESSMENT PROTOCOLS
+2.1 Cardiac-Risk Vessels: Any vessel with a history of engine failure or electrical fires is classified as "Cardiac-Risk".
+  - Pre-underwriting screening: Mandatory engine compression test and electrical system audit.
+  - Premium adjustment: Add 0.75% to standard premium.
+2.2 Age Factors:
+  - Vessels 15-20 years: +0.5% premium surcharge.
+  - Vessels > 20 years: +1.0% surcharge + mandatory dry-dock inspection.
+
+SECTION 3: CLAIMS PROCESSING STANDARDS
+3.1 Filing Window: Claims must be filed within 30 days of the incident.
+3.2 Approval Thresholds:
+  - Claims under $10,000: Auto-approval by system.
+  - Claims $10,001 – $50,000: Requires Underwriter approval.
+  - Claims over $50,000: Requires Admin approval + loss adjuster report.',
+    'policy_manual',
+    1
+);
