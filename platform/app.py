@@ -2,7 +2,9 @@
 """Harborstone Insurance Platform - Main Application."""
 
 import sys
+import re
 from pathlib import Path
+from datetime import datetime
 
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
@@ -59,6 +61,9 @@ from platform.models import (
     AgentListResponse,
 )
 
+# Import State Graphs
+from state_graph import AppealGraph, RenewalGraph, FraudGraph
+
 load_dotenv(project_root / ".env")
 
 app = FastAPI(title="Harborstone Insurance Platform")
@@ -78,6 +83,234 @@ def render_template(template_name: str, context: dict) -> str:
     """Render a template with the given context."""
     template = jinja_env.get_template(template_name)
     return template.render(**context)
+
+
+# ============================================================
+# GRAPH EXECUTION HELPER
+# ============================================================
+
+async def execute_graph(agent: str, message: str, session_id: str = None) -> Dict[str, Any]:
+    """
+    Execute a state graph based on the agent type.
+    
+    This replaces the mock chat with real graph execution.
+    
+    Args:
+        agent: The agent ID (appeal, renewal, fraud)
+        message: The user's message
+        session_id: Optional session ID for resuming
+    
+    Returns:
+        Dict with reply and session_id
+    """
+    # Try to extract IDs from the message
+    claim_match = re.search(r"claim\s*#?\s*(\d+)", message, re.IGNORECASE)
+    policy_match = re.search(r"policy\s*#?\s*(\d+)", message, re.IGNORECASE)
+    
+    # Default IDs for demo
+    claim_id = int(claim_match.group(1)) if claim_match else 11
+    policy_id = int(policy_match.group(1)) if policy_match else 1
+    
+    # Try to resume an existing run if session_id provided
+    if session_id:
+        # Check if there's a checkpoint for this session
+        checkpoint = get_latest_checkpoint(
+            graph_name=f"{agent}_graph",
+            run_id=session_id
+        )
+        
+        if checkpoint:
+            # Resume the graph
+            state = checkpoint.get("state", {})
+            status = state.get("status", "")
+            
+            if status == "paused":
+                # This is a HITL pause - we need the admin to resolve it
+                # The user can't resume HITL tasks directly
+                return {
+                    "reply": f"This session is paused waiting for admin review. Task ID: {state.get('task_id', 'Unknown')}",
+                    "session_id": session_id,
+                    "paused": True
+                }
+            elif status == "failed":
+                return {
+                    "reply": f"This session failed. Ticket ID: {state.get('ticket_id', 'Unknown')}. Please contact admin.",
+                    "session_id": session_id,
+                    "failed": True
+                }
+    
+    # Execute the appropriate graph
+    try:
+        if agent == "appeal":
+            graph = AppealGraph(agent_name="appeal")
+            result = await graph.run(
+                initial_state={
+                    "claim_id": claim_id,
+                    "user_message": message
+                },
+                run_id=session_id or f"appeal_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            )
+            
+            return _format_graph_result(result, "appeal")
+        
+        elif agent == "renewal":
+            graph = RenewalGraph(agent_name="renewal")
+            result = await graph.run(
+                initial_state={
+                    "policy_id": policy_id,
+                    "user_message": message
+                },
+                run_id=session_id or f"renewal_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            )
+            
+            return _format_graph_result(result, "renewal")
+        
+        elif agent == "fraud":
+            graph = FraudGraph(agent_name="fraud")
+            result = await graph.run(
+                initial_state={
+                    "claim_id": claim_id,
+                    "user_message": message
+                },
+                run_id=session_id or f"fraud_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            )
+            
+            return _format_graph_result(result, "fraud")
+        
+        else:
+            return {
+                "reply": f"Unknown agent: {agent}",
+                "session_id": None
+            }
+            
+    except Exception as e:
+        return {
+            "reply": f"Error executing graph: {str(e)}",
+            "session_id": None,
+            "error": str(e)
+        }
+
+
+def _format_graph_result(result: Dict[str, Any], agent_type: str) -> Dict[str, Any]:
+    """
+    Format the graph result for the chat response.
+    
+    Args:
+        result: The result from graph.run()
+        agent_type: The type of agent
+    
+    Returns:
+        Dict with reply and session_id
+    """
+    status = result.get("status")
+    run_id = result.get("run_id")
+    state = result.get("state", {})
+    
+    # HITL PAUSED
+    if status == "paused":
+        task_id = result.get("task_id")
+        node = result.get("node")
+        
+        messages = {
+            "appeal": f"**Appeal Paused - Waiting for Documents**\n\n"
+                     f"The appeal for claim #{state.get('claim_id', 'Unknown')} is waiting for you to upload documents.\n\n"
+                     f"**Documents Needed:**\n" + "\n".join(f"- {doc}" for doc in state.get('documents_needed', [])) +
+                     f"\n\n**Task ID:** {task_id}\n"
+                     f"**Node:** {node}\n"
+                     f"**Session:** {run_id}",
+            
+            "renewal": f"**Renewal Paused - Waiting for Underwriter Review**\n\n"
+                      f"The renewal for policy #{state.get('policy_id', 'Unknown')} needs underwriter review.\n\n"
+                      f"**Risk Score:** {state.get('risk_score', 'N/A')}\n"
+                      f"**Risk Level:** {state.get('risk_level', 'N/A')}\n"
+                      f"**Risk Factors:** {', '.join(state.get('risk_factors', ['None']))}\n\n"
+                      f"**Task ID:** {task_id}\n"
+                      f"**Node:** {node}\n"
+                      f"**Session:** {run_id}",
+            
+            "fraud": f"**Fraud Investigation Paused - Waiting for Review**\n\n"
+                    f"The fraud investigation for claim #{state.get('claim_id', 'Unknown')} needs review.\n\n"
+                    f"**Review Level:** {state.get('review_level', 'Unknown')}\n"
+                    f"**Fraud Risk:** {state.get('fraud_risk', 'Unknown')}\n"
+                    f"**Investigation Score:** {state.get('investigation_score', 'N/A')}\n\n"
+                    f"**Task ID:** {task_id}\n"
+                    f"**Node:** {node}\n"
+                    f"**Session:** {run_id}"
+        }
+        
+        return {
+            "reply": messages.get(agent_type, f"Graph paused at {node}"),
+            "session_id": run_id,
+            "paused": True,
+            "task_id": task_id
+        }
+    
+    # COMPLETED
+    elif status == "completed":
+        messages = {
+            "appeal": f"**Appeal Completed!**\n\n"
+                     f"**Claim ID:** {state.get('claim_id', 'Unknown')}\n"
+                     f"**Appeal Status:** {state.get('appeal_status', 'Unknown')}\n"
+                     f"**Strategy:** {state.get('strategy', 'Unknown')}\n"
+                     f"**Steps:** {', '.join(state.get('appeal_steps', []))}\n\n"
+                     f"**Session:** {run_id}",
+            
+            "renewal": f"**Renewal Completed!**\n\n"
+                      f"**Policy ID:** {state.get('policy_id', 'Unknown')}\n"
+                      f"**Policy Number:** {state.get('policy_number', 'Unknown')}\n"
+                      f"**Renewal Status:** {state.get('renewal_status', 'Unknown')}\n"
+                      f"**Risk Score:** {state.get('risk_score', 'N/A')}\n"
+                      f"**Steps:** {', '.join(state.get('renewal_steps', []))}\n\n"
+                      f"**Session:** {run_id}",
+            
+            "fraud": f"**Fraud Investigation Completed!**\n\n"
+                    f"**Claim ID:** {state.get('claim_id', 'Unknown')}\n"
+                    f"**Fraud Status:** {state.get('fraud_status', 'Unknown')}\n"
+                    f"**Fraud Risk:** {state.get('fraud_risk', 'Unknown')}\n"
+                    f"**Steps:** {', '.join(state.get('fraud_steps', []))}\n\n"
+                    f"**Session:** {run_id}"
+        }
+        
+        return {
+            "reply": messages.get(agent_type, f"Graph completed"),
+            "session_id": run_id,
+            "completed": True
+        }
+    
+    # FAILED
+    elif status == "failed":
+        ticket_id = result.get("ticket_id")
+        error = result.get("error", "Unknown error")
+        
+        return {
+            "reply": f"**Graph Failed**\n\n"
+                    f"**Error:** {error}\n"
+                    f"**Ticket ID:** {ticket_id}\n"
+                    f"**Node:** {result.get('node', 'Unknown')}\n\n"
+                    f"An admin has been notified and will investigate.\n"
+                    f"**Session:** {run_id}",
+            "session_id": run_id,
+            "failed": True,
+            "ticket_id": ticket_id
+        }
+    
+    # REJECTED (HITL rejection)
+    elif status == "rejected":
+        return {
+            "reply": f"**Request Rejected**\n\n"
+                    f"Your request was rejected by the administrator.\n"
+                    f"**Reason:** {state.get('final_status', 'No reason provided')}\n"
+                    f"**Session:** {run_id}",
+            "session_id": run_id,
+            "rejected": True
+        }
+    
+    # Default
+    else:
+        return {
+            "reply": f"Graph result: {result}",
+            "session_id": run_id
+        }
 
 
 # ============================================================
@@ -105,25 +338,25 @@ async def list_agents():
         {
             "id": "appeal",
             "name": "Appeal Agent",
-            "description": "Handle claim appeals with HITL",
+            "description": "Handle claim appeals with HITL (ToT + Constrained ReAct)",
             "type": "state_graph"
         },
         {
             "id": "renewal",
             "name": "Renewal Agent",
-            "description": "Policy renewal assessments with RAG",
+            "description": "Policy renewal assessments with RAG (RAG + Decomposition)",
             "type": "state_graph"
         },
         {
             "id": "fraud",
             "name": "Fraud Agent",
-            "description": "Fraud investigation with LATS",
+            "description": "Fraud investigation with LATS (LATS + Constrained ReAct)",
             "type": "state_graph"
         },
         {
             "id": "memory_rag",
             "name": "Memory & RAG Agent",
-            "description": "Front-desk triage and clinical policy",
+            "description": "Front-desk triage and document retrieval",
             "type": "rag"
         },
         {
@@ -149,32 +382,119 @@ async def list_agents():
 async def chat(request: ChatRequest):
     """
     Chat endpoint - routes to the appropriate agent.
-    Person B will replace this with actual agent integration.
+    
+    Now uses REAL state graph execution instead of mocks.
     """
-    # TODO: Person B - Integrate with real agents
-    # This is a placeholder that uses the database to check if agent exists
-
-    # Check if agent has tools enabled
+    # First, check if agent has tools enabled (for MCP tools)
     tools = get_tools_for_agent(request.agent, enabled_only=True)
-
-    if not tools:
+    
+    # Map agent IDs to names for tool checking
+    agent_name_map = {
+        "appeal": "Appeal Agent",
+        "renewal": "Renewal Agent", 
+        "fraud": "Fraud Agent",
+        "memory_rag": "Memory & RAG Agent",
+        "planning": "Planning Agent"
+    }
+    
+    agent_display_name = agent_name_map.get(request.agent, request.agent)
+    tools_check = get_tools_for_agent(agent_display_name, enabled_only=True)
+    
+    # Only check tools for state_graph agents that need MCP tools
+    if request.agent in ["appeal", "renewal", "fraud"] and not tools_check:
         return ChatResponse(
-            reply=f"Agent '{request.agent}' has no tools enabled. Please contact admin.",
+            reply=f"Agent '{request.agent}' has no MCP tools enabled. "
+                  f"Please contact admin to enable tools.\n\n"
+                  f"Try: 'I want to appeal claim 11' or 'Check policy 1'",
             agent=request.agent
         )
+    
+    # For memory_rag and planning, we could integrate with existing agents
+    if request.agent in ["memory_rag", "planning"]:
+        # TODO: Integrate with existing memory/rag agent or planning agent
+        return ChatResponse(
+            reply=f"**{request.agent} Agent**\n\n"
+                  f"Your message: '{request.message}'\n\n"
+                  f"This agent is being integrated. For now, try:\n"
+                  f"- 'appeal' → Claim appeals\n"
+                  f"- 'renewal' → Policy renewals\n"
+                  f"- 'fraud' → Fraud investigations\n\n"
+                  f"Available tools: {[t['tool_name'] for t in tools_check] if tools_check else 'None'}",
+            agent=request.agent
+        )
+    
+    # Execute the state graph
+    result = await execute_graph(
+        agent=request.agent,
+        message=request.message,
+        session_id=request.session_id
+    )
+    
+    return ChatResponse(
+        reply=result.get("reply", "No response from agent"),
+        agent=request.agent,
+        session_id=result.get("session_id")
+    )
 
-    # Mock reply - Person B will replace this
-    mock_replies = {
-        "appeal": f"🔍 I'll help you appeal that claim. Your message: '{request.message}'\n\nAvailable tools: {[t['tool_name'] for t in tools]}",
-        "renewal": f"📋 I'm checking the policy renewal. Your message: '{request.message}'\n\nAvailable tools: {[t['tool_name'] for t in tools]}",
-        "fraud": f"🕵️ Investigating fraud claim. Your message: '{request.message}'\n\nAvailable tools: {[t['tool_name'] for t in tools]}",
-        "memory_rag": f"📚 I'll search through our documents. Your message: '{request.message}'",
-        "planning": f"📊 I'll plan this for you. Your message: '{request.message}'",
-    }
 
-    reply = mock_replies.get(request.agent, f"Hello! How can I help with '{request.message}'?")
+# ============================================================
+# HITL RESUMPTION (For admin use)
+# ============================================================
 
-    return ChatResponse(reply=reply, agent=request.agent)
+@app.post("/api/admin/hitl/{task_id}/resume")
+async def resume_hitl_task(task_id: int, resolution: HITLResolution):
+    """
+    Resume a graph after HITL resolution.
+    This is called by the admin after resolving a HITL task.
+    """
+    try:
+        # Get the task
+        task = get_hitl_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        graph_name = task.get("graph_name")
+        run_id = task.get("run_id")
+        
+        # Determine which graph to resume
+        graph_map = {
+            "appeal_graph": AppealGraph,
+            "renewal_graph": RenewalGraph,
+            "fraud_graph": FraudGraph,
+        }
+        
+        graph_class = graph_map.get(graph_name)
+        if not graph_class:
+            return APIResponse(
+                status="error",
+                error=f"Unknown graph: {graph_name}"
+            )
+        
+        # Create graph instance and resume
+        agent_name = graph_name.replace("_graph", "")
+        graph = graph_class(agent_name=agent_name)
+        
+        # Set the run_id
+        graph.run_id = run_id
+        
+        # Resume with the admin's decision
+        result = await graph.resume(
+            decision=resolution.decision
+        )
+        
+        return APIResponse(
+            status="success",
+            data={
+                "graph": graph_name,
+                "run_id": run_id,
+                "result": result
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
 
 
 # ============================================================
@@ -333,7 +653,7 @@ async def resolve_hitl_endpoint(task_id: int, resolution: HITLResolution):
             task_id,
             resolution.decision,
             resolution.status,
-            resolution.notes  # ← Pass notes to database
+            resolution.notes
         )
         return APIResponse(status="success", data=result)
     except Exception as e:

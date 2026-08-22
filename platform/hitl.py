@@ -1,3 +1,4 @@
+# platform/hitl.py
 """HITL (Human-in-the-Loop) task management."""
 
 import json
@@ -16,21 +17,32 @@ def create_hitl_task(
     """Create a HITL task and return its ID."""
     with get_connection() as conn:
         cursor = conn.cursor()
+        
+        # Use OUTPUT INSERTED.* to get the ID directly
         cursor.execute("""
-            INSERT INTO PlatformHITLTasks 
+            INSERT INTO PlatformHITLTasks
             (graph_name, run_id, node_name, state, status, assigned_to, priority)
+            OUTPUT INSERTED.id
             VALUES (?, ?, ?, ?, 'pending', ?, ?)
         """, (
-            graph_name, 
-            run_id, 
-            node_name, 
+            graph_name,
+            run_id,
+            node_name,
             json.dumps(state, default=str),
             assigned_to,
             priority
         ))
-        conn.commit()
-        cursor.execute("SELECT SCOPE_IDENTITY()")
-        return int(cursor.fetchone()[0])
+        
+        row = cursor.fetchone()
+        if row and row[0] is not None:
+            return int(row[0])
+        else:
+            # Fallback: use SCOPE_IDENTITY()
+            cursor.execute("SELECT SCOPE_IDENTITY()")
+            identity = cursor.fetchone()
+            if identity and identity[0] is not None:
+                return int(identity[0])
+            raise RuntimeError("Failed to get ID for created HITL task")
 
 
 def get_hitl_task(task_id: int) -> Optional[Dict]:

@@ -1,3 +1,4 @@
+# platform/tickets.py
 """Failure ticket management."""
 
 import json
@@ -18,10 +19,13 @@ def create_ticket(
     """Create a failure ticket and return its ID."""
     with get_connection() as conn:
         cursor = conn.cursor()
+        
+        # Use OUTPUT INSERTED.* to get the ID directly
         cursor.execute("""
             INSERT INTO PlatformTickets 
             (graph_name, run_id, node_name, state, error_message, 
              error_type, assigned_to, severity, status)
+            OUTPUT INSERTED.id
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
         """, (
             graph_name,
@@ -33,9 +37,17 @@ def create_ticket(
             assigned_to,
             severity
         ))
-        conn.commit()
-        cursor.execute("SELECT SCOPE_IDENTITY()")
-        return int(cursor.fetchone()[0])
+        
+        row = cursor.fetchone()
+        if row and row[0] is not None:
+            return int(row[0])
+        else:
+            # Fallback: use SCOPE_IDENTITY()
+            cursor.execute("SELECT SCOPE_IDENTITY()")
+            identity = cursor.fetchone()
+            if identity and identity[0] is not None:
+                return int(identity[0])
+            raise RuntimeError("Failed to get ID for created ticket")
 
 
 def get_ticket(ticket_id: int) -> Optional[Dict]:
