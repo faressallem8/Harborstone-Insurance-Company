@@ -1,4 +1,4 @@
-# retrieval_eval/test_questions.py
+
 QUESTIONS = [
     # Category 1: General (Naive should handle)
     {

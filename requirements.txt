@@ -2,7 +2,6 @@ chromadb
 fastmcp
 groq
 langchain-text-splitters
-mcp
 numpy
 pyodbc
 pydantic

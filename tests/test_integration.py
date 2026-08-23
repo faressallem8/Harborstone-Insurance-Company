@@ -1,5 +1,5 @@
 """
-Integration tests for the platform.
+Integration tests for the web_platform.
 Run with: pytest tests/test_integration.py -v
 """
 
@@ -14,8 +14,8 @@ import pytest
 
 try:
     from fastapi.testclient import TestClient
-    from platform.app import app
-    from platform.database import get_connection
+    from web_platform.app import app
+    from web_platform.database import get_connection
     client = TestClient(app)
     FASTAPI_AVAILABLE = True
 except ImportError:

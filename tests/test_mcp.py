@@ -148,7 +148,7 @@ class TestMCPFunctions:
     def test_call_tool_disabled(self):
         """Test that call_tool fails when tool is disabled."""
         async def test():
-            from platform.database import (
+            from web_platform.database import (
                 register_tool,
                 delete_tool,
                 update_tool,
@@ -251,7 +251,7 @@ class TestMCPFunctions:
         print("\n--- Testing Dynamic Registry Flow ---")
 
         async def test():
-            from platform.database import (
+            from web_platform.database import (
                 register_tool,
                 delete_tool,
                 update_tool,

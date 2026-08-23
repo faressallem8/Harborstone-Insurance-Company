@@ -1,4 +1,4 @@
-// platform/static/admin.js
+
 
 // ============================================================
 // ESCAPE HTML - Prevent XSS

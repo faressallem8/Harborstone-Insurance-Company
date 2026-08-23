@@ -1,7 +1,6 @@
 import os
 import sys
 import asyncio
-import json
 import inspect
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
@@ -13,7 +12,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ConfigDict
 
 from fastmcp import FastMCP, Context
-import mcp
+
 
 
 
@@ -22,26 +21,19 @@ sys.path.insert(0, str(project_root))
 
 
 
-from platform.database import (
+from web_platform.database import (
     # Tool Registry
     get_all_tools as db_get_all_tools,
-    get_tools_for_agent as db_get_tools_for_agent,
     register_tool as db_register_tool,
     update_tool as db_update_tool,
     delete_tool as db_delete_tool,
     get_tool_by_id as db_get_tool_by_id,
-    get_tool_by_name_and_agent,
-    get_agent_tool_names,
     # HITL
     create_hitl_task as db_create_hitl_task,
     resolve_hitl_task as db_resolve_hitl_task,
-    get_hitl_task as db_get_hitl_task,
-    get_pending_hitl_tasks,
     # Tickets
     create_ticket as db_create_ticket,
     resolve_ticket as db_resolve_ticket,
-    get_ticket as db_get_ticket,
-    get_open_tickets,
     # Checkpoints
     save_checkpoint as db_save_checkpoint,
     get_checkpoint as db_get_checkpoint,

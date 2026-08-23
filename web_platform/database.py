@@ -1,5 +1,5 @@
 """
-SQL Server database connection and helpers for the platform.
+SQL Server database connection and helpers for the web_platform.
 Handles all database operations for tools, documents, HITL tasks, tickets, and checkpoints.
 """
 
@@ -7,8 +7,7 @@ import os
 import pyodbc
 import json
 from typing import Optional, List, Dict, Any
-from datetime import datetime
-from contextlib import contextmanager
+
 
 
 # ============================================================

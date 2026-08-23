@@ -1,4 +1,4 @@
-"""Pydantic models for the platform API."""
+"""Pydantic models for the web_platform API."""
 
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List

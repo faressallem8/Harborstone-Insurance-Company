@@ -1,4 +1,4 @@
-# state_graph/base_graph.py
+
 """
 Base State Graph with Checkpointing, HITL, and Ticket Support.
 """
@@ -10,8 +10,8 @@ from datetime import datetime
 from enum import Enum
 import uuid
 
-# Import platform database functions for persistence
-from platform.database import (
+# Import web_platform database functions for persistence
+from web_platform.database import (
     save_checkpoint as db_save_checkpoint,
     get_checkpoint as db_get_checkpoint,
     get_latest_checkpoint as db_get_latest_checkpoint,
@@ -180,16 +180,16 @@ class BaseStateGraph(ABC):
     
     def _create_hitl_task(self, node_name: str, state: Dict) -> int:
         """
-        Create a HITL task in the platform.
+        Create a HITL task in the web_platform.
         
-        The graph pauses and waits for human action through the platform UI.
+        The graph pauses and waits for human action through the web_platform UI.
         
         The human can:
         - Approve: proceed with the action
         - Reject: stop the workflow
         - Modify: change state before proceeding
         """
-        from platform.hitl import create_hitl_task as platform_create_hitl
+        from web_platform.hitl import create_hitl_task as platform_create_hitl
         
         return platform_create_hitl(
             graph_name=self.name,
@@ -228,7 +228,7 @@ class BaseStateGraph(ABC):
         - Model returns something the graph can't act on
         - Timeout occurs on a critical node
         """
-        from platform.tickets import create_ticket as platform_create_ticket
+        from web_platform.tickets import create_ticket as platform_create_ticket
         
         return platform_create_ticket(
             graph_name=self.name,

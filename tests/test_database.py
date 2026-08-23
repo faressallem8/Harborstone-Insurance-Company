@@ -4,7 +4,7 @@ Run with: pytest tests/test_database.py -v
 """
 
 import sys
-import asyncio  # ← أضف هذا
+import asyncio
 from pathlib import Path
 
 # Add project root to path
@@ -13,7 +13,7 @@ sys.path.insert(0, str(project_root))
 
 import pytest
 
-from platform.database import (
+from web_platform.database import (
     get_connection,
     get_pending_hitl_tasks,
     create_hitl_task,
@@ -54,7 +54,7 @@ class TestDatabaseConnection:
             pytest.fail(f"Database connection failed: {e}")
 
     def test_tables_exist(self):
-        """Test that platform tables exist"""
+        """Test that web_platform tables exist"""
         with get_connection() as conn:
             cursor = conn.cursor()
             tables = [
@@ -415,7 +415,7 @@ class TestDynamicRegistry:
         print("\n--- Testing Dynamic Registry Flow ---")
         
         async def run_test():
-            from platform.database import register_tool, update_tool, delete_tool, get_tools_for_agent
+            from web_platform.database import register_tool, update_tool, delete_tool, get_tools_for_agent
             
             agent_name = "Test Dynamic Agent"
             tool_name = "test_dynamic_registry_tool"

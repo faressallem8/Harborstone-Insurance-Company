@@ -13,11 +13,11 @@ sys.path.insert(0, str(project_root))
 import pytest
 
 # Import get_connection for cleanup
-from platform.database import get_connection
+from web_platform.database import get_connection
 
 try:
     from fastapi.testclient import TestClient
-    from platform.app import app
+    from web_platform.app import app
     client = TestClient(app)
     FASTAPI_AVAILABLE = True
 except ImportError:

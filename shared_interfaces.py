@@ -1,6 +1,6 @@
 
 """
-These functions create HITL tasks and tickets in the platform.
+These functions create HITL tasks and tickets in the web_platform.
 """
 
 from typing import Dict, Any, Optional
@@ -13,7 +13,7 @@ def create_hitl_task(
         state: Dict[str, Any]
 ) -> int:
     """Create a HITL task and return its ID."""
-    from platform.hitl import create_hitl_task as _create
+    from web_platform.hitl import create_hitl_task as _create
     return _create(graph_name, run_id, node_name, state)
 
 
@@ -25,7 +25,7 @@ def create_ticket(
         error: str
 ) -> int:
     """Create a failure ticket and return its ID."""
-    from platform.tickets import create_ticket as _create
+    from web_platform.tickets import create_ticket as _create
     return _create(graph_name, run_id, node_name, state, error)
 
 
@@ -37,7 +37,7 @@ def save_checkpoint(
 ) -> None:
     """Save a graph checkpoint."""
     import json
-    from platform.database import get_connection
+    from web_platform.database import get_connection
 
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -63,7 +63,7 @@ def load_checkpoint(
 ) -> Optional[Dict[str, Any]]:
     """Load a graph checkpoint."""
     import json
-    from platform.database import get_connection
+    from web_platform.database import get_connection
 
     with get_connection() as conn:
         cursor = conn.cursor()

@@ -1,4 +1,4 @@
-# state_graph/renewal_graph.py
+
 """
 Renewal Graph - Policy Renewal with External Data Wait and RAG.
 
@@ -379,7 +379,7 @@ class RenewalGraph(BaseStateGraph):
         2. Store the request ID
         3. Poll for completion or wait for webhook
         
-        The HITL system will mark the report as received via the platform.
+        The HITL system will mark the report as received via the web_platform.
         """
         state["inspection_requested_at"] = datetime.now().isoformat()
         state["inspection_status"] = "pending"

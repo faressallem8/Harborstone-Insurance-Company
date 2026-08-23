@@ -1,11 +1,11 @@
-# platform/app.py
+
 """Harborstone Insurance Platform - Main Application."""
 
 import sys
 import re
 from pathlib import Path
 from datetime import datetime
-
+from typing import Dict, Any
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -15,9 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-# Import from platform modules
-from platform.database import (
-    get_connection,
+# Import from web_platform modules
+from web_platform.database import (
     # HITL
     get_pending_hitl_tasks,
     get_hitl_task,
@@ -45,10 +44,9 @@ from platform.database import (
     get_latest_checkpoint,
 )
 
-from platform.models import (
+from web_platform.models import (
     ChatRequest,
     ChatResponse,
-    ToolToggle,
     RAGDocument,
     ToolRegistryCreate,
     ToolRegistryUpdate,
@@ -57,8 +55,6 @@ from platform.models import (
     TicketCreate,
     TicketResolution,
     APIResponse,
-    AgentInfo,
-    AgentListResponse,
 )
 
 # Import State Graphs
@@ -69,11 +65,11 @@ load_dotenv(project_root / ".env")
 app = FastAPI(title="Harborstone Insurance Platform")
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="platform/static"), name="static")
+app.mount("/static", StaticFiles(directory="web_platform/static"), name="static")
 
 # Create Jinja2 environment
 jinja_env = Environment(
-    loader=FileSystemLoader("platform/templates"),
+    loader=FileSystemLoader("web_platform/templates"),
     autoescape=select_autoescape(['html', 'xml']),
     cache_size=0,
     auto_reload=True
@@ -352,19 +348,7 @@ async def list_agents():
             "name": "Fraud Agent",
             "description": "Fraud investigation with LATS (LATS + Constrained ReAct)",
             "type": "state_graph"
-        },
-        {
-            "id": "memory_rag",
-            "name": "Memory & RAG Agent",
-            "description": "Front-desk triage and document retrieval",
-            "type": "rag"
-        },
-        {
-            "id": "planning",
-            "name": "Planning Agent",
-            "description": "Decomposition and planning",
-            "type": "planning"
-        },
+        }
     ]
 
     # Get tools for each agent from database
@@ -393,8 +377,6 @@ async def chat(request: ChatRequest):
         "appeal": "Appeal Agent",
         "renewal": "Renewal Agent", 
         "fraud": "Fraud Agent",
-        "memory_rag": "Memory & RAG Agent",
-        "planning": "Planning Agent"
     }
     
     agent_display_name = agent_name_map.get(request.agent, request.agent)
@@ -408,20 +390,7 @@ async def chat(request: ChatRequest):
                   f"Try: 'I want to appeal claim 11' or 'Check policy 1'",
             agent=request.agent
         )
-    
-    # For memory_rag and planning, we could integrate with existing agents
-    if request.agent in ["memory_rag", "planning"]:
-        # TODO: Integrate with existing memory/rag agent or planning agent
-        return ChatResponse(
-            reply=f"**{request.agent} Agent**\n\n"
-                  f"Your message: '{request.message}'\n\n"
-                  f"This agent is being integrated. For now, try:\n"
-                  f"- 'appeal' → Claim appeals\n"
-                  f"- 'renewal' → Policy renewals\n"
-                  f"- 'fraud' → Fraud investigations\n\n"
-                  f"Available tools: {[t['tool_name'] for t in tools_check] if tools_check else 'None'}",
-            agent=request.agent
-        )
+
     
     # Execute the state graph
     result = await execute_graph(

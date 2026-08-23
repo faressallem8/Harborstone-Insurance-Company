@@ -1,9 +1,9 @@
-# platform/tickets.py
+
 """Failure ticket management."""
 
 import json
 from typing import Dict, Any, List, Optional
-from platform.database import get_connection
+from web_platform.database import get_connection
 
 
 def create_ticket(

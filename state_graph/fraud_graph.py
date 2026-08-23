@@ -1,4 +1,4 @@
-# state_graph/fraud_graph.py
+
 """
 Fraud Graph - Fraud Investigation with Cross-Department Escalation.
 
