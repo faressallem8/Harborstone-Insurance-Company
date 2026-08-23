@@ -2,195 +2,167 @@
 
 An AI-powered assistant for marine insurance operations, built on the **Model Context Protocol (MCP)** with **stateful graph-based workflows** for complex multi-step processes.
 
-Employees can check claims, retrieve policy information, file new claims, approve high-value decisions, perform AI-assisted risk assessments, manage long conversations, and now execute **stateful, recoverable workflows** with **Human-in-the-Loop** approval and **ticket-based failure recovery**.
+Employees can check claims, retrieve policy information, file new claims, approve high-value decisions, perform AI-assisted risk assessments, manage long conversations, and execute **stateful, recoverable workflows** with **Human-in-the-Loop (HITL)** approval and **ticket-based failure recovery**.
 
-This project demonstrates a complete MCP client/server implementation consisting of:
+The project consists of:
 
-- A Python **MCP server** built with FastMCP exposing tools, resources, and prompts backed by a SQL Server database.
-- A Python **MCP agent** that connects to the server, uses **Groq Llama 3** for reasoning and tool calling, and provides an interactive terminal interface.
-- A **Memory & RAG module** that provides long-term memory and grounded document retrieval.
-- A **Context Evaluation framework** that compares multiple long-context management strategies using realistic insurance conversations.
-- **State Graph Agents** with checkpointing, Human-in-the-Loop (HITL), and ticket-based failure recovery.
-- A **Web Platform** where users can chat with agents and admins can manage tools, documents, HITL tasks, and tickets.
+- A Python **MCP server** (`mcp_server/`) built with FastMCP, exposing tools, resources, and prompts backed by a SQL Server database.
+- A Python **MCP agent** (`agent/`) that connects to the server over stdio, uses **Groq** for reasoning and tool calling, and provides an interactive terminal chat.
+- A **Memory & RAG module** (`memory/`, `RAG/`) providing long-term memory and grounded document retrieval.
+- A **Context Evaluation framework** (`context_eval/`) comparing long-context management strategies on realistic insurance conversations.
+- **State Graph Agents** (`state_graph/`) with checkpointing, HITL, and ticket-based failure recovery for Appeal, Renewal, and Fraud workflows.
+- A **Web Platform** (`web_platform/`) — a FastAPI app where users chat with the three state-graph agents and admins manage tools, RAG documents, HITL tasks, and tickets.
+- A **Planning Lab** (`planning_lab/`, `planning_agent/`, `planning_eval/`) implementing task-decomposition and reasoning strategies (ToT, LATS, Reflexion, Self-Refine, Plan-and-Solve) used by the state graphs, plus a standalone `planning/` reference submodule.
 
 ---
 
 ## Features
 
-- **Conversational access to company data** — ask natural-language questions about claims, policies, customers, and underwriting information.
+- **Conversational access to company data** — natural-language questions about claims, policies, customers, and underwriting information.
 - **Role-based permissions** — Claims Officer, Underwriter, Risk Analyst, and Admin roles each have different permissions.
 - **Human-in-the-loop approval** — claims above $10,000 require explicit human confirmation before approval.
 - **AI-assisted risk assessment** — combines deterministic underwriting rules with LLM-generated explanations.
-- **Audit logging** — important actions are stored inside the AuditLogs table.
-- **Reusable MCP resources and prompts** — underwriting guidelines, compliance policy, and denial letter templates.
-- **Memory & Retrieval-Augmented Generation (RAG)** — enables the assistant to remember previous information and retrieve company knowledge from documents.
-- **Long-context management evaluation** — implements and evaluates multiple context pruning strategies for handling conversations that exceed the model context window.
-- **Automated benchmarking** — compares context strategies using Accuracy, Remaining Tokens, and Latency.
-- **State Graph Agents** — stateful, recoverable workflows for complex multi-step processes.
-- **Human-in-the-Loop (HITL)** — pause execution for human approval with platform-based resolution.
-- **Ticket-based Failure Recovery** — unplanned failures create inspectable tickets for admin investigation.
-- **Checkpointing** — crash recovery with durable state persistence after every transition.
-- **Web Platform** — user chat interface and admin dashboard for tool/document management.
+- **Audit logging** — key actions are recorded in the `AuditLogs` table.
+- **Reusable MCP resources and prompts** — underwriting guidelines, compliance policy, and a denial-letter template.
+- **Memory & Retrieval-Augmented Generation (RAG)** — lets the terminal agent remember prior context and ground answers in company documents.
+- **Long-context management evaluation** — implements and benchmarks multiple context-pruning strategies.
+- **State Graph Agents** — stateful, recoverable workflows for Appeal, Renewal, and Fraud processes, each combining two reasoning techniques from the Planning Lab.
+- **Checkpointing & crash recovery** — durable state persisted to SQL Server after every node transition.
+- **Ticket-based failure recovery** — unplanned failures create inspectable tickets for admin review.
+- **Web Platform** — chat UI for the state-graph agents plus an admin dashboard for tools, documents, HITL tasks, and tickets.
 
 ---
 
 ## Architecture
+
+```
 User
-│
-▼
-Web Platform (platform/app.py)
-│
-├── User Chat Interface
-│ └── Agent Switching (Appeal, Renewal, Fraud, Memory_RAG, Planning)
-│
-└── Admin Dashboard
-├── Tool Management (enable/disable per agent)
-├── RAG Document Management
-├── HITL Task Resolution
-└── Ticket Resolution
-│
-▼
+  │
+  ▼
+Web Platform (web_platform/app.py)
+  │
+  ├── Chat UI ── agent = appeal | renewal | fraud
+  │
+  └── Admin Dashboard
+        ├── Tool Registry (enable/disable MCP tools per agent)
+        ├── RAG Document Management
+        ├── HITL Task Resolution
+        └── Ticket Resolution
+  │
+  ▼
 State Graph Agents (state_graph/)
-│
-├── Appeal Graph (ToT + Constrained ReAct)
-├── Renewal Graph (RAG + Task Decomposition)
-└── Fraud Graph (LATS + Constrained ReAct)
-│
-├── Checkpointing (PlatformGraphCheckpoints)
-├── HITL Tasks (PlatformHITLTasks)
-└── Tickets (PlatformTickets)
-│
-▼
-MCP Agent (agent.py)
+  ├── Appeal Graph   — Tree of Thoughts + Constrained ReAct (Self-Refine)
+  ├── Renewal Graph  — RAG + Task Decomposition
+  └── Fraud Graph    — LATS + Constrained ReAct (Self-Refine)
+        │
+        ├── Checkpointing → PlatformGraphCheckpoints
+        ├── HITL Tasks    → PlatformHITLTasks
+        └── Tickets       → PlatformTickets
+  │
+  ▼ (state graphs call MCP tools directly via mcp_server.server.call_tool)
+MCP Server (mcp_server/server.py)
+  ├── FastMCP tools, resources, prompts
+  ├── Role-based permissions & human approval (elicitation)
+  └── Reads/writes SQL Server directly via pyodbc
 
-Groq Llama 3 reasoning & tool calling
+─────────────────────────────────────────────
 
-Memory integration
+Terminal MCP Agent (agent/agent.py)  — separate entry point, connects to the
+same MCP server over stdio as its own client process
+  ├── Groq reasoning & tool calling
+  ├── RAG retrieval (RAG/)
+  └── Short-Term / Episodic / Semantic memory (memory/)
 
-RAG retrieval
+─────────────────────────────────────────────
 
-Context management
-│
-│ MCP Protocol over stdio
-▼
-MCP Server (server.py)
-
-FastMCP tools
-
-Resources
-
-Prompts
-
-Human approval
-
-Role-based permissions
-│
-▼
 SQL Server Database
-│
-├──────────────────────┬──────────────────────┬──────────────────────┐
-▼ ▼ ▼
-Memory Module RAG Module Platform Tables
+  ├── Business tables: Customers, Employees, Vessels, InsurancePolicies,
+  │   CoverageTypes, PolicyCoverage, Claims, FraudChecks, AuditLogs,
+  │   ClaimWorkflow, Payments
+  └── Platform tables: PlatformHITLTasks, PlatformTickets,
+      PlatformGraphCheckpoints, PlatformToolRegistry, PlatformRAGDocuments
 
-Short-Term Memory - Chroma Vector DB - PlatformHITLTasks
+─────────────────────────────────────────────
 
-Semantic Memory - HNSW Index - PlatformTickets
+Supporting evaluation frameworks (offline, not wired into the live app):
+  ├── context_eval/    — Sliding Window, Observation Masking,
+  │                      Recursive Summarization, Zone-Based Pruning
+  ├── retrieval_eval/  — Naive RAG, Hybrid RAG, Agentic RAG
+  └── planning_eval/   — compares decomposition vs. self-refine strategies
+```
 
-Episodic Memory - Metadata Store - PlatformGraphCheckpoints
-
-Consolidation Layer - Embedding Pipeline - PlatformToolRegistry
-
-Promote/Drop Logic - Retrieval Methods - PlatformRAGDocuments
-│
-├──────────────────────┴──────────────────────┐
-▼ ▼
-Context Evaluation Retrieval Evaluation
-
-Sliding Window - Naive RAG
-
-Observation Masking - Hybrid RAG (Vector + BM25)
-
-Recursive Summarization - Agentic RAG (Multi-hop)
-
-Zone-Based Pruning - Self-RAG Verification
-
-text
+> **Note on agents:** the Web Platform currently exposes exactly **three** chat agents — `appeal`, `renewal`, `fraud` (see `web_platform/app.py`, `/api/agents`). The RAG/Memory system and the Planning Lab are used by the **terminal agent** (`agent/agent.py`) and by the state graphs internally, but they are not separately selectable agents in the web UI.
 
 ---
 
 ## Tech Stack
 
 - Python 3.11+
-- FastMCP
-- MCP Python SDK
-- Groq API (Llama 3)
-- SQL Server
-- pyodbc
-- ChromaDB (Vector Database)
-- Sentence-Transformers (all-MiniLM-L6-v2)
-- rank_bm25 (Keyword Search)
-- Pydantic
-- python-dotenv
-- Pytest
-- FastAPI (Web Platform)
-- LangChain Core
+- FastMCP (server) / MCP Python SDK (`mcp`, client — used by `agent/agent.py` and the planning lab's own MCP client)
+- Groq API (chat completions)
+- FastAPI + Jinja2 + Uvicorn (web platform)
+- SQL Server + `pyodbc`
+- ChromaDB (vector store) + `sentence-transformers` (`all-MiniLM-L6-v2`)
+- `rank_bm25` (keyword search for Hybrid RAG)
+- LangChain Core + `langchain-groq` (planning agent/orchestrator LLM wrappers)
+- NetworkX (DAG validation/topological sort in `planning_lab`)
+- Pydantic, python-dotenv, Pytest
 
 ---
 
 ## Prerequisites
 
 - Python 3.11 or later
-- SQL Server (local or remote)
-- ODBC Driver 18 for SQL Server
-- A Groq API Key
+- SQL Server (local or remote) with an ODBC driver installed (e.g. **ODBC Driver 18 for SQL Server**)
+- A Groq API key
 - Git
 
 ---
 
 ## Project Structure
-Harborstone-Insurance-Company/
+
+```
+project/
 ├── agent/
-│ └── agent.py # MCP Agent with RAG integration
+│   └── agent.py              # Terminal MCP agent (Groq + RAG + memory)
 ├── mcp_server/
-│ └── server.py # FastMCP Server
-├── platform/ # Web Platform
-│ ├── app.py # FastAPI application
-│ ├── database.py # Platform database operations
-│ ├── models.py # Pydantic models
-│ ├── hitl.py # HITL task management
-│ ├── tickets.py # Ticket management
-│ ├── static/ # Static files (CSS, JS)
-│ └── templates/ # HTML templates
-├── state_graph/ # State Graph Agents
-│ ├── init.py
-│ ├── base_graph.py # Base class with checkpointing
-│ ├── llm_additions.py # LLM techniques (ToT, LATS, etc.)
-│ ├── appeal_graph.py # Appeal Graph (ToT + Constrained ReAct)
-│ ├── renewal_graph.py # Renewal Graph (RAG + Decomposition)
-│ └── fraud_graph.py # Fraud Graph (LATS + Constrained ReAct)
-├── planning_lab/ # Planning algorithms
-│ ├── algorithms/
-│ │ ├── decomposition.py
-│ │ ├── tree_of_thoughts.py
-│ │ ├── lats.py
-│ │ └── self_refine.py
-│ └── models.py
-├── memory/ # Memory system
-├── RAG/ # Retrieval-Augmented Generation
-├── context_eval/ # Context evaluation
-├── retrieval_eval/ # Retrieval evaluation
-├── chroma_db/ # Vector database
-├── data/ # Data files
-├── db/ # Database scripts
-├── tests/
-│ ├── test_state_graphs.py # State graph tests
-│ ├── test_integration.py # Integration tests
-│ └── test_mcp.py # MCP tests
-├── .env # Environment variables
+│   └── server.py              # FastMCP server (tools/resources/prompts, DB access)
+├── web_platform/               # Web Platform (FastAPI)
+│   ├── app.py                  # FastAPI app & routes
+│   ├── database.py             # All SQL Server access for the platform
+│   ├── models.py                # Pydantic request/response models
+│   ├── hitl.py                  # HITL task helpers
+│   ├── tickets.py               # Ticket helpers
+│   ├── static/                  # CSS/JS
+│   └── templates/               # Jinja2 HTML templates
+├── state_graph/                 # State Graph Agents
+│   ├── __init__.py
+│   ├── base_graph.py            # Base class: checkpointing, HITL, tickets, timeouts
+│   ├── llm_additions.py         # Wrappers around planning_lab algorithms + RAG
+│   ├── appeal_graph.py          # ToT + Constrained ReAct
+│   ├── renewal_graph.py         # RAG + Task Decomposition
+│   └── fraud_graph.py           # LATS + Constrained ReAct
+├── planning_lab/                 # Reasoning algorithm implementations
+│   ├── algorithms/               # decomposition, ToT, LATS, self-refine, reflexion, plan-and-solve
+│   ├── cli.py
+│   └── models.py
+├── planning_agent/               # Orchestrator that drives planning_lab via MCP + Groq
+├── planning_eval/                 # Benchmarks planning strategies
+├── planning/                       # Git submodule: original Mistral-based reference lab
+├── memory/                          # Short-term / episodic / semantic memory + consolidation
+├── RAG/                              # Retrieval (naive / hybrid / agentic / self-RAG)
+├── context_eval/                      # Long-context pruning strategy benchmarks
+├── retrieval_eval/                     # RAG architecture benchmarks
+├── db/                                  # SQL scripts (schema, seed data, queries) + ERD.pdf
+├── artifacts/                            # Saved evaluation run outputs (JSON)
+├── chroma_db/                             # Local vector store (generated — see note below)
+├── harborstone_manual.txt                  # Source document indexed by RAG
+├── shared_interfaces.py                     # Unused — see Known Issues
+├── tests/                                    # pytest suites (API, DB, integration, MCP, state graphs)
+├── .env.example
 ├── requirements.txt
 └── README.md
-
-text
+```
 
 ---
 
@@ -198,57 +170,44 @@ text
 
 ### Overview
 
-The system includes three **stateful, recoverable graph agents** for complex business processes that span multiple turns, wait for external events, or require human approval.
+The system includes three **stateful, recoverable graph agents** for business processes that span multiple turns, wait for external events, or require human approval.
 
 Each graph implements:
-- **Checkpointing** — state persisted after every transition for crash recovery
-- **HITL (Human-in-the-Loop)** — pauses for human approval via the platform
-- **Tickets** — unplanned failures create inspectable tickets
-- **Two LLM additions** per graph from: Tree of Thoughts, LATS, Constrained ReAct, Task Decomposition, or RAG
+- **Checkpointing** — state persisted after every transition, for crash recovery.
+- **HITL (Human-in-the-Loop)** — pauses for human approval via the platform.
+- **Tickets** — unplanned failures create inspectable tickets.
+- **Two reasoning techniques**, taken from the Planning Lab (Tree of Thoughts, LATS, Task Decomposition, RAG, Self-Refine/Constrained ReAct).
 
 ### The Three State Graphs
 
-| Graph | Problem | Why Stateful | LLM Additions |
-|-------|---------|--------------|---------------|
+| Graph | Problem | Why Stateful | Reasoning Techniques |
+|---|---|---|---|
 | **Appeal Graph** | Multi-day claim appeal process | Waits for customer documents, underwriter review, manager escalation | Tree of Thoughts (strategy selection) + Constrained ReAct (form submission) |
-| **Renewal Graph** | Policy renewal with external data | Waits for vessel inspection report (24-72 hours), risk assessment, underwriter review | RAG (underwriting guidelines) + Task Decomposition (sub-tasks) |
+| **Renewal Graph** | Policy renewal with external data | Waits for vessel inspection report, risk assessment, underwriter review | RAG (underwriting guidelines) + Task Decomposition (sub-tasks) |
 | **Fraud Graph** | Cross-department fraud investigation | Claims → Underwriting → Legal review chain, branching decisions | LATS (investigation ordering) + Constrained ReAct (whitelisted actions) |
 
-### State Flow Diagrams
+### State Flow (high level)
 
 **Appeal Graph:**
-start → claim_denied → appeal_started → appeal_strategy (ToT) → awaiting_documents (HITL)
-→ documents_received → submitting_appeal (Constrained ReAct) → underwriter_review (HITL)
-→ appeal_approved OR appeal_denied → (escalated_to_manager HITL) → end
-
-text
+`start → claim_denied → appeal_started → appeal_strategy (ToT) → awaiting_documents (HITL) → documents_received → submitting_appeal (Constrained ReAct) → underwriter_review (HITL) → appeal_approved | appeal_denied → (escalated_to_manager HITL) → end`
 
 **Renewal Graph:**
-start → renewal_started → fetch_vessel_details → decompose_renewal (Decomposition)
-→ await_inspection_report (wait) → report_received OR report_timeout (ticket)
-→ risk_assessment (RAG + ToT) → auto_renew OR underwriter_review (HITL) → end
-
-text
+`start → renewal_started → fetch_vessel_details → decompose_renewal (Decomposition) → await_inspection_report → report_received | report_timeout (ticket) → risk_assessment (RAG) → auto_renew | underwriter_review (HITL) → end`
 
 **Fraud Graph:**
-start → fraud_flagged → claims_review (HITL) → fraud_cleared OR underwriting_review (HITL)
-→ fraud_cleared OR legal_review (HITL) → fraud_cleared OR fraud_confirmed → end
-
-text
+`start → fraud_flagged → claims_review (HITL) → fraud_cleared | underwriting_review (HITL) → fraud_cleared | legal_review (HITL) → fraud_cleared | fraud_confirmed → end`
 
 ### Checkpointing & Crash Recovery
 
-Every node transition saves a checkpoint to the `PlatformGraphCheckpoints` table. If the process crashes, it resumes exactly from the last checkpoint.
-
-**Test Proof:** `test_appeal_graph_crash_recovery` passes, demonstrating crash recovery.
+Every node transition saves a checkpoint to `PlatformGraphCheckpoints`. If the process crashes, it can resume from the last checkpoint.
 
 ### Human-in-the-Loop (HITL)
 
-HITL nodes pause execution and create a task in the `PlatformHITLTasks` table. The admin resolves it through the platform UI.
+HITL nodes pause execution and create a task in `PlatformHITLTasks`, resolved by an admin through the platform UI (`/api/admin/hitl/{task_id}/resolve` or `/resume`).
 
 ### Tickets
 
-Unplanned failures (timeouts, API errors, validation failures) create tickets in the `PlatformTickets` table.
+Unplanned failures (timeouts, API errors, validation failures) create tickets in `PlatformTickets`, viewable and resolvable at `/api/admin/tickets`.
 
 ---
 
@@ -256,25 +215,22 @@ Unplanned failures (timeouts, API errors, validation failures) create tickets in
 
 ### User Interface
 
-- **Agent Switching** — users can switch between agents (Appeal, Renewal, Fraud, Memory_RAG, Planning)
-- **Chat Interface** — send messages and see agent responses
-- **Session Persistence** — stateful conversations with session IDs
+- **Chat Interface** — send messages to one of the three state-graph agents (`appeal`, `renewal`, `fraud`) and see responses.
+- **Session Persistence** — conversations are tracked by `session_id`.
 
 ### Admin Dashboard
 
 | Feature | Description |
-|---------|-------------|
-| **Tool Management** | Enable/disable MCP tools per agent |
+|---|---|
+| **Tool Management** | Enable/disable MCP tools per agent (`PlatformToolRegistry`) |
 | **RAG Document Management** | Add/remove/activate documents for retrieval |
 | **HITL Tasks** | View and resolve pending human approvals |
 | **Tickets** | View and resolve system failures |
 
 ### Platform Tables
 
-The platform uses these SQL Server tables:
-
 | Table | Purpose |
-|-------|---------|
+|---|---|
 | `PlatformHITLTasks` | HITL tasks awaiting admin approval |
 | `PlatformTickets` | System failures needing investigation |
 | `PlatformGraphCheckpoints` | Durable checkpoints for crash recovery |
@@ -288,176 +244,192 @@ The platform uses these SQL Server tables:
 ### 1. Clone the repository
 
 ```bash
-git clone <your-repository-url>
-cd Harborstone-Insurance-Company
-2. Create a virtual environment
-Windows
+git clone --recurse-submodules <your-repository-url>
+cd <repo-folder>
+```
 
-bash
+The `planning/` folder is a **git submodule**. If you already cloned without `--recurse-submodules`, run:
+
+```bash
+git submodule update --init --recursive
+```
+
+### 2. Create a virtual environment
+
+**Windows**
+```bash
 python -m venv .venv
 .venv\Scripts\activate
-Linux / macOS
+```
 
-bash
+**Linux / macOS**
+```bash
+python -m venv .venv
 source .venv/bin/activate
-3. Install dependencies
-bash
+```
+
+### 3. Install dependencies
+
+```bash
 pip install -r requirements.txt
-4. Configure the database
-Create the SQL Server database:
+```
 
-text
-HarborstoneInsurance
-Run the SQL scripts inside the db/ folder:
+> The checked-in `requirements.txt` is missing a few packages that the code actually imports. Until it's updated, also install:
+> ```bash
+> pip install mcp langchain-core langchain-groq networkx
+> ```
+> (`mcp` is the official MCP client SDK used by `agent/agent.py` and `planning_agent/`, separate from `fastmcp` which is only used server-side. `networkx` is required by `planning_lab/models.py`.) If you plan to run the `planning/` submodule directly, also `pip install -r planning/requirements.txt` in its own environment — it targets Mistral instead of Groq.
 
-text
-create_database.sql
-seed_data.sql
-queries.sql
-5. Configure environment variables
-Create a .env file in the project root.
+### 4. Configure the database
 
-Example:
+Create the SQL Server database, then run the scripts in `db/` **in order**:
 
-env
-# SQL Server
+```
+db/create_database.sql
+db/seed_data.sql
+```
+
+`db/queries.sql` contains example/reference queries and is not required to run the app. `db/ERD.pdf` has the full entity-relationship diagram.
+
+### 5. Configure environment variables
+
+Copy `.env.example` to `.env` in the project root and fill it in:
+
+```env
+# SQL Server connection
 WIN_DB_SERVER=localhost\SQLEXPRESS
 WIN_DB_NAME=HarborstoneInsurance
 WIN_DB_DRIVER=ODBC Driver 18 for SQL Server
+
+# Auth mode: WINDOWS (Trusted_Connection) or SQL
 WIN_DB_AUTH_TYPE=WINDOWS
 
-# If SQL Authentication is used:
+# Only needed when WIN_DB_AUTH_TYPE=SQL
 # WIN_DB_USERNAME=your_username
 # WIN_DB_PASSWORD=your_password
 
-# MCP
+# MCP transport (stdio is the only supported mode today)
 TRANSPORT_TYPE=stdio
 
 # Groq
 GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=llama-3.3-70b-versatile
-Running the Project
-Start the Platform
-bash
-python platform/app.py
-Then open: http://localhost:8000
+```
 
-Start the MCP Agent (Terminal)
-The MCP Agent automatically launches the MCP Server.
+> **Note:** the code reads `WIN_DB_AUTH_TYPE` to decide between Windows and SQL authentication — it does **not** read `WIN_TRUSTED_CONNECTION`, even though that name appears in `.env.example`. Set `WIN_DB_AUTH_TYPE=WINDOWS` (or `SQL`) explicitly. See Known Issues below.
 
-bash
+---
+
+## Running the Project
+
+### Start the Web Platform
+
+Run from the **project root** (both the templates and static-files paths are relative to the working directory):
+
+```bash
+python web_platform/app.py
+```
+
+Then open `http://localhost:8000`.
+
+### Start the terminal MCP Agent
+
+```bash
 python agent/agent.py
-The startup sequence is:
+```
 
-Launch MCP Server
+This automatically launches the MCP server as a subprocess over stdio and walks through: server launch → MCP handshake → tool/resource/prompt discovery → RAG indexing of `harborstone_manual.txt` → login → interactive chat.
 
-Complete MCP handshake
+> See **Known Issues** — running this file directly currently executes the whole agent flow twice due to a duplicated entry point.
 
-Discover available tools
+---
 
-Load MCP resources
+## Testing
 
-Load MCP prompts
+```bash
+pytest tests/ -v                     # everything
+pytest tests/test_state_graphs.py -v # state graphs only
+pytest tests/test_integration.py -v  # integration
+pytest tests/test_mcp.py -v          # MCP server/tools
+pytest tests/test_database.py -v     # database layer
+pytest tests/test_api.py -v          # web platform API
+```
 
-Initialize RAG system (auto-indexes the policy manual)
+Additional test suites live alongside their modules:
 
-User login
+```bash
+pytest memory/tests/ -v
+pytest context_eval/tests/ -v
+pytest planning_agent/test_decomposition.py -v
+pytest planning/tests/ -v            # submodule, uses Mistral
+```
 
-Interactive AI chat begins
+All of the suites above talk to a real SQL Server database and, for the agent/LLM paths, real Groq (or Mistral, for `planning/`) API calls — they are not mocked. A configured `.env` and reachable database are required before running them.
 
-Testing
-Run All Tests
-bash
-pytest tests/ -v
-Run State Graph Tests
-bash
-pytest tests/test_state_graphs.py -v
-Run Integration Tests
-bash
-pytest tests/test_integration.py -v
-Run MCP Tests
-bash
-pytest tests/test_mcp.py -v
-Test Results
-text
-tests/test_state_graphs.py::TestStateGraphs::test_appeal_graph PASSED
-tests/test_state_graphs.py::TestStateGraphs::test_renewal_graph PASSED
-tests/test_state_graphs.py::TestStateGraphs::test_fraud_graph PASSED
-tests/test_state_graphs.py::TestStateGraphs::test_appeal_graph_crash_recovery PASSED
+---
 
-==================== 4 passed in 27.58s ====================
-Available MCP Tools
-Tool	Description	Access
-login	Authenticate and start a session	Everyone
-check_claim_status	Retrieve claim information	Everyone
-get_customer_info	Retrieve customer information	Everyone
-get_policy_details	Retrieve policy information	Everyone
-file_claim	Submit a new insurance claim	Everyone
-approve_claim	Approve or reject claims (Human Approval for high-value claims)	Underwriter, Risk Analyst, Admin
-assess_risk	AI-assisted insurance risk assessment	Everyone
-Roles & Approval Limits
-Role	Can Approve Claims?	Approval Limit
-Claims Officer	No	—
-Risk Analyst	Yes	Up to $50,000
-Underwriter	Yes	Up to $100,000
-Admin	Yes	Unlimited
-Claims exceeding $10,000 always require explicit human confirmation before approval.
+## Available MCP Tools
 
-MCP Resources & Prompts
-Resources
+| Tool | Description | Access |
+|---|---|---|
+| `login` | Authenticate and start a session | Everyone |
+| `check_claim_status` | Retrieve claim information | Everyone |
+| `get_customer_info` | Retrieve customer information | Everyone |
+| `get_policy_details` | Retrieve policy information | Everyone |
+| `file_claim` | Submit a new insurance claim | Everyone |
+| `approve_claim` | Approve or reject claims (human confirmation for high-value claims) | Underwriter, Risk Analyst, Admin |
+| `assess_risk` | AI-assisted insurance risk assessment | Everyone |
 
-underwriting://guidelines
+### Roles & Approval Limits
 
-compliance://policy
+| Role | Can Approve Claims? | Approval Limit |
+|---|---|---|
+| Claims Officer | No | — |
+| Risk Analyst | Yes | Up to $50,000 |
+| Underwriter | Yes | Up to $100,000 |
+| Admin | Yes | Unlimited |
 
-Prompts
+Claims exceeding $10,000 always require explicit human confirmation before approval, regardless of role.
 
-draft_denial_letter
+### MCP Resources & Prompts
 
-RAG (Retrieval-Augmented Generation)
-The agent uses RAG to answer knowledge-based questions by grounding responses in the Harborstone Insurance Policy Manual.
+**Resources:** `underwriting://guidelines`, `compliance://policy`
+**Prompts:** `draft_denial_letter`
 
-How RAG Works in the Agent
-User asks a knowledge question (contains words like "policy," "section," "guideline," etc.)
+---
 
-Agent detects it's a knowledge question using pattern matching
+## RAG (Retrieval-Augmented Generation)
 
-RAG retrieves relevant chunks from the vector database
+The terminal agent uses RAG to ground answers to knowledge questions in the Harborstone Insurance Policy Manual (`harborstone_manual.txt`), and the Renewal Graph uses it to retrieve underwriting guidelines.
 
-Self-RAG verification checks if the answer is supported and relevant
+### How RAG works in the terminal agent
 
-If verified, the agent returns the grounded answer with source citation
+1. The user asks a knowledge question (detected via pattern matching on words like "policy," "section," "guideline").
+2. The RAG retriever pulls relevant chunks from the Chroma vector store.
+3. A Self-RAG verifier checks the answer is faithful to the retrieved context and relevant to the question.
+4. If verified, the agent returns the grounded answer with a source citation; otherwise it falls back to a tool-based approach.
 
-If not verified, the agent falls back to tool-based approach
+### Implemented retrieval architectures
 
-Implemented Retrieval Architectures
-Architecture	Description
-Naive RAG	Chunk → embed → retrieve top-5 → generate answer with retrieved chunks. Fastest and most cost-effective.
-Hybrid RAG	Combines vector similarity with BM25 keyword search using Reciprocal Rank Fusion (RRF).
-Agentic RAG	Multi-step reasoning loop: retrieves, grades relevance, rewrites query if needed, retrieves again.
-Self-RAG Verification
-Before returning an answer, the agent performs two checks:
+| Architecture | Description |
+|---|---|
+| Naive RAG | Chunk → embed → retrieve top-5 → generate. Fastest and most cost-effective. |
+| Hybrid RAG | Vector similarity + BM25 keyword search, combined with Reciprocal Rank Fusion. |
+| Agentic RAG | Multi-step loop: retrieve, grade relevance, rewrite query if needed, retrieve again. |
 
-Faithfulness: Does the answer strictly follow from the retrieved context?
+### Retrieval evaluation results (`retrieval_eval/`)
 
-Relevance: Does the answer directly address the question?
+| Architecture | Accuracy (of 12) | Avg Tokens/Query | Avg Latency |
+|---|---|---|---|
+| Naive RAG | 10/12 (83%) | 277 | 0.41s |
+| Hybrid RAG | 10/12 (83%) | 320 | 1.24s |
+| Agentic RAG | 9/12 (75%) | 328 | 16.03s |
 
-If both pass, the answer is returned with a source citation.
+**Naive RAG** is used by default: it matches Hybrid RAG's accuracy at roughly a third of the latency, and comfortably beats Agentic RAG on both accuracy and latency.
 
-Retrieval Evaluation Results
-Architecture	Accuracy (out of 12)	Avg Tokens/Query	Avg Latency
-Naive RAG	10/12 (83%)	277	0.41s
-Hybrid RAG	10/12 (83%)	320	1.24s
-Agentic RAG	9/12 (75%)	328	16.03s
-Why Naive RAG Was Chosen
-Despite Hybrid Search being theoretically superior, our comparison table shows it offers zero accuracy gain over Naive RAG (both score 10/12) while incurring 3x the latency (1.24s vs 0.41s). Agentic RAG was disqualified due to its prohibitive 16-second latency—making it unsuitable for live underwriting calls where agents expect sub-second responses.
+### RAG configuration (`RAG/config.py`)
 
-We chose Naive RAG because it delivers the highest accuracy at the lowest cost and latency, directly aligning with our business requirement for fast, accurate policy lookups during live calls.
-
-RAG Configuration
-The RAG system is configured in RAG/config.py:
-
-python
+```python
 DEFAULT_RETRIEVER = "naive"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 CHUNK_SIZE = 500
@@ -465,19 +437,24 @@ CHUNK_OVERLAP = 50
 DEFAULT_TOP_K = 5
 RETRIEVAL_CANDIDATE_K = 10
 FUSION_FINAL_K = 5
-Memory System
-The agent includes a layered memory system designed to preserve useful conversation information while keeping the active context manageable.
+```
 
-Memory Architecture
-Component	Purpose
-Short-Term Memory	Keeps the active conversation messages and recent context.
-Scratchpad	Stores temporary working information used during the current reasoning process.
-Episodic Memory	Stores important conversation events and large messages that may be useful later.
-Semantic Memory	Stores durable facts extracted from conversation summaries.
-Consolidation Layer	Routes short-term messages to the appropriate long-term memory layer.
-Promotion Strategy	Decides whether a message should be kept, promoted to episodic memory, promoted to semantic memory, or dropped.
-Memory Flow
-text
+---
+
+## Memory System
+
+The terminal agent includes a layered memory system that preserves useful conversation information while keeping the active context manageable.
+
+| Component | Purpose |
+|---|---|
+| Short-Term Memory | Active conversation messages and recent context. |
+| Scratchpad | Temporary working information during the current reasoning process. |
+| Episodic Memory | Important conversation events and large messages that may be useful later. |
+| Semantic Memory | Durable facts extracted from conversation summaries. |
+| Consolidation Layer | Routes short-term messages to the appropriate long-term layer. |
+| Promotion Strategy | Decides KEEP / EPISODIC / SEMANTIC / DROP for each message. |
+
+```
 User / Agent Message
         │
         ▼
@@ -486,190 +463,109 @@ Short-Term Memory
         ▼
 Promotion Strategy
         │
-        ├── KEEP ───────────────► Short-Term Memory
-        ├── EPISODIC ───────────► Episodic Memory
-        ├── SEMANTIC ────────────► Semantic Memory
-        └── DROP ────────────────► Discarded
-Context Management Evaluation
-Large Language Models have a limited context window. As conversations become longer, important information may be forgotten or the prompt may exceed the model's token limit.
+        ├── KEEP ─────► Short-Term Memory
+        ├── EPISODIC ─► Episodic Memory
+        ├── SEMANTIC ─► Semantic Memory
+        └── DROP ─────► Discarded
+```
 
-To address this challenge, a dedicated Context Evaluation Framework was implemented to compare multiple context pruning strategies on realistic long-running insurance conversations.
+Memory is currently in-process only (see Known Limitations).
 
-Implemented Strategies
-Strategy	Description
-Sliding Window	Keeps only the most recent conversation messages. Very fast but loses historical information.
-Observation Masking	Masks old tool outputs while preserving the user-assistant conversation. Preserves important information.
-Recursive Summarization	Summarizes older conversation history using an LLM while preserving key information. Best token reduction.
-Zone-Based Pruning	Divides conversation into zones: keep newest, mask recent tool outputs, summarize older history, remove oldest.
-Evaluation Results
-Strategy	Accuracy	Remaining Tokens	Latency (s)
-Sliding Window	0.00%	68	0.000001
-Observation Masking	100.00%	283	0.000120
-Recursive Summarization	100.00%	131	0.456764
-Zone-Based Pruning	0.00%	227	0.300230
-Selected Strategy
-Recursive Summarization was selected as the preferred long-context management strategy. Although it introduces additional latency, it successfully preserved all critical information while reducing the average context size by more than 50%.
+---
 
-Contributors
-Person B — State Graph Implementation
-Contributions:
+## Context Management Evaluation
 
-Designed and implemented the BaseStateGraph class with:
+Since LLMs have a limited context window, `context_eval/` implements and compares strategies for keeping long insurance conversations within budget.
 
-Durable checkpointing (PlatformGraphCheckpoints)
+| Strategy | Description |
+|---|---|
+| Sliding Window | Keeps only the most recent messages. Very fast, loses history. |
+| Observation Masking | Masks old tool outputs while preserving the user-assistant conversation. |
+| Recursive Summarization | LLM-summarizes older history while preserving key information. Best token reduction. |
+| Zone-Based Pruning | Newest kept, recent tool outputs masked, older history summarized, oldest removed. |
 
-HITL task creation (PlatformHITLTasks)
+### Evaluation results
 
-Ticket creation (PlatformTickets)
+| Strategy | Accuracy | Remaining Tokens | Latency (s) |
+|---|---|---|---|
+| Sliding Window | 0.00% | 68 | 0.000001 |
+| Observation Masking | 100.00% | 283 | 0.000120 |
+| Recursive Summarization | 100.00% | 131 | 0.456764 |
+| Zone-Based Pruning | 0.00% | 227 | 0.300230 |
 
-Node execution with timeout handling
+**Recursive Summarization** is the selected strategy: it preserves all critical information while cutting average context size by more than half, at an acceptable latency cost. This evaluation framework is not yet wired into the live terminal agent — see Known Limitations.
 
-Crash recovery and resume functionality
+---
 
-Implemented llm_additions.py with wrappers for:
+## Known Issues
 
-Tree of Thoughts (from planning_lab/)
+These were found while reviewing the project and should be addressed before relying on it in production:
 
-LATS (from planning_lab/)
+1. **`agent/agent.py` runs its whole flow twice.** The file ends with two separate `if __name__ == "__main__": asyncio.run(main())` blocks. Running `python agent/agent.py` executes `main()` to completion once, then immediately executes it a second time. This is almost certainly a merge/copy-paste leftover — remove the second block.
 
-Task Decomposition (from planning_lab/)
+2. **`requirements.txt` is missing real dependencies.** The code imports `mcp` (client SDK), `langchain_core`, `langchain_groq`, and `networkx`, none of which are listed in the root `requirements.txt` (only `fastmcp` and `langchain-text-splitters` are). A fresh `pip install -r requirements.txt` will not be enough to run `agent/agent.py`, `planning_agent/`, `planning_eval/`, or `planning_lab/models.py`.
 
-Constrained ReAct (Self-Refine from planning_lab/)
+3. **`.env.example` doesn't match what the code reads.** `WIN_TRUSTED_CONNECTION=yes` is not read anywhere — `mcp_server/server.py` reads `WIN_DB_AUTH_TYPE` instead, which isn't in `.env.example`. Neither are `WIN_DB_USERNAME`/`WIN_DB_PASSWORD`, needed for the SQL-auth branch. As shipped, `.env.example` gives no working way to select or configure authentication mode explicitly (it happens to fall back to the `WINDOWS` default, but only by coincidence).
 
-RAG retrieval (from RAG/)
+4. **The Web Platform only supports three agents, not five.** `web_platform/app.py`'s `/api/agents` and `/api/chat` only recognize `appeal`, `renewal`, and `fraud`. RAG/Memory and the Planning Lab exist as separate modules used elsewhere (the terminal agent, the state graphs), but they are not selectable chat agents in the web UI. Documentation or UI copy claiming otherwise should be corrected.
 
-Built three state graphs:
+5. **`shared_interfaces.py` is dead code.** It's never imported anywhere in the project. It re-implements `create_hitl_task`, `create_ticket`, and `save_checkpoint`/`load_checkpoint` against `web_platform.database`/`web_platform.hitl`/`web_platform.tickets` independently of `state_graph/base_graph.py`, which talks to `web_platform.database` directly. Since nothing calls it, it can only drift out of sync with the real implementation — either wire it up or delete it.
 
-Appeal Graph — multi-day claim appeal with ToT + Constrained ReAct
+6. **The web app must be started from the project root.** `web_platform/app.py` mounts static files and templates using the relative paths `"web_platform/static"` and `"web_platform/templates"`. Running it from inside the `web_platform/` directory (e.g. `cd web_platform && python app.py`) will fail to find them.
 
-Renewal Graph — policy renewal with RAG + Task Decomposition
+7. **A handful of bare `except:` clauses** (`state_graph/renewal_graph.py`, `state_graph/fraud_graph.py`, `web_platform/app.py`, `planning_agent/environment.py`) silently swallow all exceptions, including ones you'd normally want to see (and `KeyboardInterrupt`). Worth narrowing to specific exception types.
 
-Fraud Graph — fraud investigation with LATS + Constrained ReAct
+8. **A few f-strings are missing their placeholders** — e.g. `state_graph/fraud_graph.py:273`, `web_platform/app.py:271`, and several spots in `tests/test_integration.py` / `tests/test_database.py`. These look like debug print statements that lost their `{variable}` during editing; worth a quick pass to confirm no information is being silently dropped from log/error messages.
 
-Integrated graphs into the platform (app.py)
+9. **`chroma_db/` isn't excluded by `.gitignore`.** It contains a generated, binary vector index. Left untracked, it will bloat the git history the first time someone commits after indexing; consider adding it to `.gitignore` and regenerating it on first run instead.
 
-Created test suite with 4 passing tests
+10. **Static analysis, not full runtime testing.** All 92 Python files compile cleanly (no syntax errors) and pass a `pyflakes` pass with only minor, non-blocking warnings (mostly unused imports/locals, listed in items 7–8 above). The test suite requires a live SQL Server instance and real Groq/Mistral API keys, so it was reviewed statically here rather than executed — treat the above as a code review, not a test run.
 
-Updated platform/hitl.py and platform/tickets.py for reliable ID retrieval
+**Also worth flagging outside the code itself:** the uploaded archive includes a real `.env` file alongside the source. `.gitignore` correctly excludes `.env` from version control, so it likely isn't in git history — but since it left your machine in this zip, it's worth rotating the Groq API key it contains as a precaution.
 
-Other Contributors
-MCP Server implementation
+---
 
-AI Agent implementation
+## Contributors
 
-Memory System
+**Person B — State Graph Implementation**
 
-Retrieval-Augmented Generation (RAG)
+- Designed and implemented `BaseStateGraph` with durable checkpointing (`PlatformGraphCheckpoints`), HITL task creation (`PlatformHITLTasks`), ticket creation (`PlatformTickets`), timeout-aware node execution, and crash recovery/resume.
+- Implemented `llm_additions.py`: wrappers for Tree of Thoughts, LATS, Task Decomposition, Constrained ReAct (Self-Refine), and RAG retrieval, all built on `planning_lab/` and `RAG/`.
+- Built the three state graphs (Appeal, Renewal, Fraud) and integrated them into the platform (`app.py`).
+- Wrote the state-graph test suite.
 
-Context Evaluation Framework
+**Other contributors:** MCP Server implementation · AI Agent implementation · Memory System · Retrieval-Augmented Generation (RAG) · Context Evaluation Framework · SQL Database Design · Platform UI/Admin Dashboard.
 
-SQL Database Design
+---
 
-Platform UI/Admin Dashboard
+## Known Limitations
 
-Known Limitations
-Login currently verifies only the username. Password authentication is not yet implemented.
+- Login currently verifies only the username; password authentication is not yet implemented.
+- The MCP server uses stdio transport, supporting a single local client at a time.
+- Recursive Summarization depends on an external LLM call, adding latency.
+- Context evaluation uses a fixed set of test conversations rather than dynamically generated workloads, and its strategies aren't yet wired into the live terminal agent.
+- The RAG corpus is currently limited to a single policy manual.
+- Agentic RAG underperforms due to query-rewriting and grading limitations.
+- Memory is in-process only — nothing persists across agent restarts.
 
-The MCP server currently uses stdio transport, supporting a single local client.
+## Future Improvements
 
-Recursive Summarization depends on an external LLM, which increases response latency.
+**MCP:** HTTP/WebSocket transport · multi-user concurrent sessions · password hashing + JWT auth · more insurance tools.
 
-Context evaluation currently uses a fixed collection of test conversations rather than dynamically generated workloads.
+**State Graphs:** additional business-process graphs · parallel node execution · visual graph representation · dynamic graph modification at runtime.
 
-The selected context management strategy is configured manually and is not automatically chosen based on conversation length.
+**Platform:** user authentication/sessions · real-time HITL notifications · streaming responses.
 
-The RAG corpus is currently limited to a single policy manual.
+**Memory:** persistent storage in the database · automatic consolidation · better episodic retrieval · adaptive scratchpad management.
 
-Agentic RAG shows poor performance due to query rewriting and grading limitations.
+**RAG:** re-ranking · incremental indexing · multiple document collections · better query rewriting for Agentic RAG · retrieval result caching.
 
-Future Improvements
-MCP
+**Context Management:** hybrid Observation-Masking + Recursive-Summarization strategy · dynamic strategy selection based on context size · automatic pruning at the token limit.
 
-Support HTTP and WebSocket transport.
+**Agent:** integrate the Context Evaluation framework into the live terminal agent · automatic strategy switching · support for continuous long conversations without exceeding the context window.
 
-Multi-user concurrent sessions.
+---
 
-Stronger authentication with password hashing and JWT.
+## License
 
-More insurance-related MCP tools.
-
-State Graphs
-
-Add more graphs for additional business processes.
-
-Support for parallel node execution.
-
-Better visual graph representation.
-
-Dynamic graph modification at runtime.
-
-Platform
-
-User authentication and sessions.
-
-Real-time notifications for HITL tasks.
-
-Better UI/UX with streaming responses.
-
-Memory
-
-Persistent long-term memory stored in a database.
-
-Automatic memory consolidation.
-
-Better episodic memory retrieval.
-
-Adaptive scratchpad management.
-
-Retrieval-Augmented Generation (RAG)
-
-Re-ranking retrieved documents before generation.
-
-Incremental indexing for newly added documents.
-
-Support for multiple document collections.
-
-Better query rewriting for Agentic RAG.
-
-Caching of retrieval results to reduce latency.
-
-Context Management
-
-Hybrid strategy combining Observation Masking and Recursive Summarization.
-
-Dynamic strategy selection based on the current context size.
-
-Automatic pruning when the token limit is reached.
-
-Better summarization prompts specialized for insurance conversations.
-
-AI Agent
-
-Integrate the Context Evaluation framework directly into the live MCP Agent.
-
-Allow the agent to automatically switch between pruning strategies.
-
-Support continuous long conversations without exceeding the model context window.
-
-License
-This project was developed for educational purposes as part of a university training program.
-
-It is intended to demonstrate:
-
-Model Context Protocol (MCP)
-
-Long-Term Memory
-
-Retrieval-Augmented Generation (RAG)
-
-Context Management Strategies
-
-AI Agent Design
-
-Human-in-the-loop workflows
-
-State Graph Architectures
-
-Crash Recovery & Checkpointing
-
-No commercial use is intended.
+This project was developed for educational purposes as part of a university training program, to demonstrate the Model Context Protocol (MCP), long-term memory, Retrieval-Augmented Generation, context-management strategies, AI agent design, human-in-the-loop workflows, state-graph architectures, and crash recovery/checkpointing.
