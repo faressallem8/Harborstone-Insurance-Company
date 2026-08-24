@@ -16,21 +16,36 @@ from typing import Optional, List, Dict, Any
 
 def get_connection():
     """
-    Get a SQL Server connection using Windows Authentication.
-    Uses the same config as your MCP server.
+    Get a SQL Server connection using the same config as the MCP server
+    (mcp_server/server.py's get_connection_string): supports both Windows
+    and SQL authentication via WIN_DB_AUTH_TYPE, instead of always using
+    Windows auth regardless of that setting.
     """
-    server = os.getenv("WIN_DB_SERVER")
-    database = os.getenv("WIN_DB_NAME")
-    driver = os.getenv("WIN_DB_DRIVER")
-    
-    conn_str = (
-        f"DRIVER={{{driver}}};"
-        f"SERVER={server};"
-        f"DATABASE={database};"
-        "Trusted_Connection=yes;"
-        "TrustServerCertificate=yes;"
-    )
-    
+    server = os.getenv("WIN_DB_SERVER", "localhost\\SQLEXPRESS")
+    database = os.getenv("WIN_DB_NAME", "HarborstoneInsurance")
+    driver = os.getenv("WIN_DB_DRIVER", "ODBC Driver 18 for SQL Server")
+    auth_type = os.getenv("WIN_DB_AUTH_TYPE", "WINDOWS")
+
+    if auth_type.upper() == "WINDOWS":
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            "Trusted_Connection=yes;"
+            "TrustServerCertificate=yes;"
+        )
+    else:
+        username = os.getenv("WIN_DB_USERNAME", "")
+        password = os.getenv("WIN_DB_PASSWORD", "")
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            f"UID={username};"
+            f"PWD={password};"
+            "TrustServerCertificate=yes;"
+        )
+
     return pyodbc.connect(conn_str)
 
 

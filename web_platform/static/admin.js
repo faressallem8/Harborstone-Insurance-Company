@@ -1,5 +1,3 @@
-
-
 // ============================================================
 // ESCAPE HTML - Prevent XSS
 // ============================================================
@@ -43,22 +41,21 @@ async function loadTools() {
     try {
         const response = await fetch('/api/admin/tools');
         const data = await response.json();
-        
+
         if (data.status === 'error') {
-            document.getElementById('tools-container').innerHTML = 
+            document.getElementById('tools-container').innerHTML =
                 `<div class="alert alert-danger">${escapeHtml(data.error)}</div>`;
             return;
         }
 
-        const tools = data.data || [];
-        
+        const tools = data.data?.tools || data.data || [];
+
         if (tools.length === 0) {
-            document.getElementById('tools-container').innerHTML = 
+            document.getElementById('tools-container').innerHTML =
                 '<div class="text-center text-muted py-3">No tools registered.</div>';
             return;
         }
 
-        // Group by agent
         const agents = {};
         tools.forEach(t => {
             if (!agents[t.agent_name]) agents[t.agent_name] = [];
@@ -74,16 +71,16 @@ async function loadTools() {
                     <span class="badge bg-secondary">${toolList.length} tools</span>
                 </h6>
                 <div class="row mb-3">`;
-            
+
             toolList.forEach(t => {
                 html += `
                     <div class="col-md-4 col-lg-3">
                         <div class="form-check form-switch">
-                            <input class="form-check-input tool-toggle" 
-                                   type="checkbox" 
+                            <input class="form-check-input tool-toggle"
+                                   type="checkbox"
                                    data-tool-id="${t.id}"
-                                   data-tool="${escapeHtml(t.tool_name)}" 
-                                   data-agent="${escapeHtml(t.agent_name)}" 
+                                   data-tool="${escapeHtml(t.tool_name)}"
+                                   data-agent="${escapeHtml(t.agent_name)}"
                                    ${t.enabled ? 'checked' : ''}>
                             <label class="form-check-label">
                                 ${escapeHtml(t.tool_name)}
@@ -94,13 +91,12 @@ async function loadTools() {
                         </div>
                     </div>`;
             });
-            
+
             html += `</div>`;
         }
-        
+
         document.getElementById('tools-container').innerHTML = html;
 
-        // Add event listeners to toggles
         document.querySelectorAll('.tool-toggle').forEach(el => {
             el.addEventListener('change', function() {
                 toggleTool(
@@ -111,7 +107,7 @@ async function loadTools() {
         });
 
     } catch(e) {
-        document.getElementById('tools-container').innerHTML = 
+        document.getElementById('tools-container').innerHTML =
             `<div class="alert alert-danger">Error loading tools: ${escapeHtml(e.message)}</div>`;
     }
 }
@@ -123,9 +119,9 @@ async function toggleTool(toolId, enabled) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'success') {
             showSuccess(`Tool ${enabled ? 'enabled' : 'disabled'} successfully`);
             loadTools();
@@ -147,17 +143,17 @@ async function loadDocuments() {
     try {
         const response = await fetch('/api/admin/documents');
         const data = await response.json();
-        
+
         if (data.status === 'error') {
-            document.getElementById('documents-container').innerHTML = 
+            document.getElementById('documents-container').innerHTML =
                 `<div class="alert alert-danger">${escapeHtml(data.error)}</div>`;
             return;
         }
 
-        const docs = data.data || [];
-        
+        const docs = data.data?.documents || data.data || [];
+
         if (docs.length === 0) {
-            document.getElementById('documents-container').innerHTML = 
+            document.getElementById('documents-container').innerHTML =
                 '<div class="text-center text-muted py-3">No documents. Click "Add Document" to upload one.</div>';
             return;
         }
@@ -175,7 +171,7 @@ async function loadDocuments() {
                         </tr>
                     </thead>
                     <tbody>`;
-        
+
         docs.forEach(d => {
             html += `
                 <tr>
@@ -186,12 +182,12 @@ async function loadDocuments() {
                             ${d.active ? 'Active' : 'Inactive'}
                         </span>
                     </td>
-                    <td>${new Date(d.added_at).toLocaleDateString()}</td>
+                    <td>${d.added_at ? new Date(d.added_at).toLocaleDateString() : 'N/A'}</td>
                     <td>
-                        ${d.active ? 
+                        ${d.active ?
                             `<button class="btn btn-sm btn-outline-danger" onclick="deleteDocument(${d.id})">
                                 <i class="fas fa-trash"></i>
-                            </button>` : 
+                            </button>` :
                             `<button class="btn btn-sm btn-outline-success" onclick="activateDocument(${d.id})">
                                 <i class="fas fa-check"></i> Activate
                             </button>`
@@ -199,12 +195,12 @@ async function loadDocuments() {
                     </td>
                 </tr>`;
         });
-        
+
         html += `</tbody></table></div>`;
         document.getElementById('documents-container').innerHTML = html;
 
     } catch(e) {
-        document.getElementById('documents-container').innerHTML = 
+        document.getElementById('documents-container').innerHTML =
             `<div class="alert alert-danger">Error loading documents: ${escapeHtml(e.message)}</div>`;
     }
 }
@@ -234,9 +230,9 @@ async function addDocument() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, content, source, active })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'success') {
             bootstrap.Modal.getInstance(document.getElementById('addDocumentModal')).hide();
             showSuccess(`Document "${escapeHtml(name)}" added successfully`);
@@ -251,14 +247,14 @@ async function addDocument() {
 
 async function deleteDocument(id) {
     if (!confirm('Are you sure you want to delete this document?')) return;
-    
+
     try {
         const response = await fetch(`/api/admin/documents/${id}`, {
             method: 'DELETE'
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'success') {
             showSuccess('Document deleted successfully');
             loadDocuments();
@@ -277,9 +273,9 @@ async function activateDocument(id) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ active: true })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'success') {
             showSuccess('Document activated successfully');
             loadDocuments();
@@ -292,17 +288,16 @@ async function activateDocument(id) {
 }
 
 // ============================================================
-// HITL TASKS
+// HITL TASKS – UPDATED with outcome controls
 // ============================================================
 
 async function loadHITL() {
     try {
         const response = await fetch('/api/admin/hitl');
         const data = await response.json();
-        
-        // Check for error first
+
         if (data.status === 'error') {
-            document.getElementById('hitl-container').innerHTML = 
+            document.getElementById('hitl-container').innerHTML =
                 `<div class="alert alert-danger">${escapeHtml(data.error)}</div>`;
             document.getElementById('hitl-badge').textContent = '0';
             return;
@@ -310,9 +305,9 @@ async function loadHITL() {
 
         const tasks = data.data?.tasks || [];
         document.getElementById('hitl-badge').textContent = tasks.length;
-        
+
         if (tasks.length === 0) {
-            document.getElementById('hitl-container').innerHTML = 
+            document.getElementById('hitl-container').innerHTML =
                 '<div class="text-center text-muted py-3">No pending HITL tasks. All good! ✅</div>';
             return;
         }
@@ -320,6 +315,36 @@ async function loadHITL() {
         let html = '';
         tasks.forEach(t => {
             const statePreview = t.state ? JSON.stringify(t.state, null, 2) : '{}';
+
+            // Determine which outcome buttons to show based on node name
+            let outcomeButtons = '';
+            if (t.node_name === 'claims_review' || t.node_name === 'underwriting_review') {
+                outcomeButtons = `
+                    <button class="btn btn-sm btn-success me-1" onclick="resolveHITL(${t.id}, 'approved', 'cleared')">
+                        <i class="fas fa-check me-1"></i>Approve (Clear)
+                    </button>
+                    <button class="btn btn-sm btn-warning me-1" onclick="resolveHITL(${t.id}, 'approved', 'suspicious')">
+                        <i class="fas fa-exclamation-triangle me-1"></i>Escalate
+                    </button>
+                `;
+            } else if (t.node_name === 'legal_review') {
+                outcomeButtons = `
+                    <button class="btn btn-sm btn-success me-1" onclick="resolveHITL(${t.id}, 'approved', 'cleared')">
+                        <i class="fas fa-check me-1"></i>Approve (Clear)
+                    </button>
+                    <button class="btn btn-sm btn-danger me-1" onclick="resolveHITL(${t.id}, 'approved', 'confirmed')">
+                        <i class="fas fa-gavel me-1"></i>Confirm Fraud
+                    </button>
+                `;
+            } else {
+                // Default: simple approve with no outcome
+                outcomeButtons = `
+                    <button class="btn btn-sm btn-success me-1" onclick="resolveHITL(${t.id}, 'approved', null)">
+                        <i class="fas fa-check me-1"></i>Approve
+                    </button>
+                `;
+            }
+
             html += `
                 <div class="border-bottom py-3">
                     <div class="d-flex justify-content-between align-items-start">
@@ -345,43 +370,47 @@ async function loadHITL() {
                         </details>
                     </div>
                     <div class="mt-2">
-                        <button class="btn btn-sm btn-success me-1" onclick="resolveHITL(${t.id}, 'approved')">
-                            <i class="fas fa-check me-1"></i>Approve
-                        </button>
-                        <button class="btn btn-sm btn-danger" onclick="resolveHITL(${t.id}, 'rejected')">
+                        ${outcomeButtons}
+                        <button class="btn btn-sm btn-danger" onclick="resolveHITL(${t.id}, 'rejected', null)">
                             <i class="fas fa-times me-1"></i>Reject
                         </button>
                     </div>
                 </div>`;
         });
-        
+
         document.getElementById('hitl-container').innerHTML = html;
 
     } catch(e) {
-        document.getElementById('hitl-container').innerHTML = 
+        document.getElementById('hitl-container').innerHTML =
             `<div class="alert alert-danger">Error loading HITL tasks: ${escapeHtml(e.message)}</div>`;
         document.getElementById('hitl-badge').textContent = '0';
     }
 }
 
-async function resolveHITL(taskId, action) {
+// Updated resolveHITL to accept an outcome parameter
+async function resolveHITL(taskId, action, outcome = null) {
     if (!confirm(`Do you want to ${action} this task?`)) return;
-    
+
+    const decision = { action };
+    if (outcome) {
+        decision.outcome = outcome;
+    }
+
     try {
         const response = await fetch(`/api/admin/hitl/${taskId}/resolve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                decision: { action, timestamp: new Date().toISOString() },
+            body: JSON.stringify({
+                decision: decision,
                 status: action === 'approved' ? 'resolved' : 'rejected',
-                notes: `Admin ${action} this task on ${new Date().toLocaleString()}`
+                notes: `Admin ${action} this task with outcome: ${outcome || 'N/A'}`
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'success') {
-            showSuccess(`Task #${taskId} ${action} successfully`);
+            showSuccess(`Task #${taskId} ${action} successfully${outcome ? ' with outcome: ' + outcome : ''}`);
             loadHITL();
         } else {
             showError(`Failed to resolve: ${escapeHtml(data.error)}`);
@@ -399,10 +428,9 @@ async function loadTickets() {
     try {
         const response = await fetch('/api/admin/tickets');
         const data = await response.json();
-        
-        // Check for error first
+
         if (data.status === 'error') {
-            document.getElementById('tickets-container').innerHTML = 
+            document.getElementById('tickets-container').innerHTML =
                 `<div class="alert alert-danger">${escapeHtml(data.error)}</div>`;
             document.getElementById('ticket-badge').textContent = '0';
             return;
@@ -410,9 +438,9 @@ async function loadTickets() {
 
         const tickets = data.data?.tickets || [];
         document.getElementById('ticket-badge').textContent = tickets.length;
-        
+
         if (tickets.length === 0) {
-            document.getElementById('tickets-container').innerHTML = 
+            document.getElementById('tickets-container').innerHTML =
                 '<div class="text-center text-muted py-3">No open tickets. System is healthy! ✅</div>';
             return;
         }
@@ -449,11 +477,11 @@ async function loadTickets() {
                     </button>
                 </div>`;
         });
-        
+
         document.getElementById('tickets-container').innerHTML = html;
 
     } catch(e) {
-        document.getElementById('tickets-container').innerHTML = 
+        document.getElementById('tickets-container').innerHTML =
             `<div class="alert alert-danger">Error loading tickets: ${escapeHtml(e.message)}</div>`;
         document.getElementById('ticket-badge').textContent = '0';
     }
@@ -462,19 +490,19 @@ async function loadTickets() {
 async function resolveTicket(ticketId) {
     const notes = prompt('Enter resolution notes:');
     if (notes === null) return;
-    
+
     try {
         const response = await fetch(`/api/admin/tickets/${ticketId}/resolve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
+            body: JSON.stringify({
                 status: 'resolved',
                 resolution_notes: notes || 'Resolved by admin'
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'success') {
             showSuccess(`Ticket #${ticketId} resolved successfully`);
             loadTickets();
@@ -492,6 +520,7 @@ async function resolveTicket(ticketId) {
 
 function showSuccess(message) {
     const container = document.getElementById('alert-container');
+    if (!container) return;
     container.innerHTML = `
         <div class="alert alert-success alert-dismissible fade show" role="alert">
             <i class="fas fa-check-circle me-2"></i>${escapeHtml(message)}
@@ -506,6 +535,7 @@ function showSuccess(message) {
 
 function showError(message) {
     const container = document.getElementById('alert-container');
+    if (!container) return;
     container.innerHTML = `
         <div class="alert alert-danger alert-dismissible fade show" role="alert">
             <i class="fas fa-exclamation-circle me-2"></i>${escapeHtml(message)}
@@ -522,19 +552,15 @@ function showError(message) {
 // AUTO-REFRESH (every 30 seconds) - only counts, not full reload
 // ============================================================
 
-// Load all data on page load
 document.addEventListener('DOMContentLoaded', function() {
     loadAllData();
 });
 
-// Auto-refresh HITL and Tickets counts every 30 seconds
 setInterval(() => {
     const hitlTab = document.getElementById('hitl-tab');
     const ticketsTab = document.getElementById('tickets-tab');
-    
-    // Only refresh counts, not full content
+
     if (hitlTab && hitlTab.classList.contains('active')) {
-        // Just update the badge count without full reload
         fetch('/api/admin/hitl')
             .then(r => r.json())
             .then(data => {

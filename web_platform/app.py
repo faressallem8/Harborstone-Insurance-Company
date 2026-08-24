@@ -1,11 +1,14 @@
-
 """Harborstone Insurance Platform - Main Application."""
 
 import sys
 import re
+import subprocess
+import atexit
+import signal
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
+
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -59,10 +62,59 @@ from web_platform.models import (
 
 # Import State Graphs
 from state_graph import AppealGraph, RenewalGraph, FraudGraph
-
+from mcp_server.server import tool_registry
 load_dotenv(project_root / ".env")
 
 app = FastAPI(title="Harborstone Insurance Platform")
+
+mcp_server_process = None
+
+def start_mcp_server():
+    """Start the MCP server as a background subprocess."""
+    global mcp_server_process
+    if mcp_server_process is not None and mcp_server_process.poll() is None:
+        print("[MCP] Server already running.")
+        return
+    cmd = [sys.executable, "-m", "mcp_server.server"]
+    try:
+        mcp_server_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
+        print(f"[MCP] Server started with PID {mcp_server_process.pid}")
+    except Exception as e:
+        print(f"[MCP] Failed to start server: {e}")
+
+def stop_mcp_server():
+    """Terminate the MCP server subprocess."""
+    global mcp_server_process
+    if mcp_server_process is not None and mcp_server_process.poll() is None:
+        try:
+            mcp_server_process.terminate()
+            mcp_server_process.wait(timeout=5)
+            print("[MCP] Server stopped.")
+        except Exception as e:
+            print(f"[MCP] Error stopping server: {e}")
+
+# Ensure the server is stopped when the Python process exits
+atexit.register(stop_mcp_server)
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the tool registry and start the MCP server."""
+    # Initialize tool registry
+    await tool_registry.initialize()
+    print("[PLATFORM] Tool registry initialized.")
+    for agent, tools in tool_registry.tools_cache.items():
+        print(f"  - {agent}: {list(tools.keys())}")
+        enabled = [name for name, enabled in tools.items() if enabled]
+        if enabled:
+            print(f"  - {agent}: {', '.join(enabled)}")
+    # Start MCP server as background process
+    start_mcp_server()
+
+
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="web_platform/static"), name="static")
@@ -74,6 +126,7 @@ jinja_env = Environment(
     cache_size=0,
     auto_reload=True
 )
+
 
 def render_template(template_name: str, context: dict) -> str:
     """Render a template with the given context."""
@@ -88,25 +141,25 @@ def render_template(template_name: str, context: dict) -> str:
 async def execute_graph(agent: str, message: str, session_id: str = None) -> Dict[str, Any]:
     """
     Execute a state graph based on the agent type.
-    
+
     This replaces the mock chat with real graph execution.
-    
+
     Args:
         agent: The agent ID (appeal, renewal, fraud)
         message: The user's message
         session_id: Optional session ID for resuming
-    
+
     Returns:
         Dict with reply and session_id
     """
     # Try to extract IDs from the message
     claim_match = re.search(r"claim\s*#?\s*(\d+)", message, re.IGNORECASE)
     policy_match = re.search(r"policy\s*#?\s*(\d+)", message, re.IGNORECASE)
-    
+
     # Default IDs for demo
     claim_id = int(claim_match.group(1)) if claim_match else 11
     policy_id = int(policy_match.group(1)) if policy_match else 1
-    
+
     # Try to resume an existing run if session_id provided
     if session_id:
         # Check if there's a checkpoint for this session
@@ -114,12 +167,12 @@ async def execute_graph(agent: str, message: str, session_id: str = None) -> Dic
             graph_name=f"{agent}_graph",
             run_id=session_id
         )
-        
+
         if checkpoint:
             # Resume the graph
             state = checkpoint.get("state", {})
             status = state.get("status", "")
-            
+
             if status == "paused":
                 # This is a HITL pause - we need the admin to resolve it
                 # The user can't resume HITL tasks directly
@@ -134,7 +187,7 @@ async def execute_graph(agent: str, message: str, session_id: str = None) -> Dic
                     "session_id": session_id,
                     "failed": True
                 }
-    
+
     # Execute the appropriate graph
     try:
         if agent == "appeal":
@@ -146,9 +199,9 @@ async def execute_graph(agent: str, message: str, session_id: str = None) -> Dic
                 },
                 run_id=session_id or f"appeal_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             )
-            
+
             return _format_graph_result(result, "appeal")
-        
+
         elif agent == "renewal":
             graph = RenewalGraph(agent_name="renewal")
             result = await graph.run(
@@ -158,9 +211,9 @@ async def execute_graph(agent: str, message: str, session_id: str = None) -> Dic
                 },
                 run_id=session_id or f"renewal_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             )
-            
+
             return _format_graph_result(result, "renewal")
-        
+
         elif agent == "fraud":
             graph = FraudGraph(agent_name="fraud")
             result = await graph.run(
@@ -170,15 +223,15 @@ async def execute_graph(agent: str, message: str, session_id: str = None) -> Dic
                 },
                 run_id=session_id or f"fraud_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             )
-            
+
             return _format_graph_result(result, "fraud")
-        
+
         else:
             return {
                 "reply": f"Unknown agent: {agent}",
                 "session_id": None
             }
-            
+
     except Exception as e:
         return {
             "reply": f"Error executing graph: {str(e)}",
@@ -190,117 +243,117 @@ async def execute_graph(agent: str, message: str, session_id: str = None) -> Dic
 def _format_graph_result(result: Dict[str, Any], agent_type: str) -> Dict[str, Any]:
     """
     Format the graph result for the chat response.
-    
+
     Args:
         result: The result from graph.run()
         agent_type: The type of agent
-    
+
     Returns:
         Dict with reply and session_id
     """
     status = result.get("status")
     run_id = result.get("run_id")
     state = result.get("state", {})
-    
+
     # HITL PAUSED
     if status == "paused":
         task_id = result.get("task_id")
         node = result.get("node")
-        
+
         messages = {
             "appeal": f"**Appeal Paused - Waiting for Documents**\n\n"
-                     f"The appeal for claim #{state.get('claim_id', 'Unknown')} is waiting for you to upload documents.\n\n"
-                     f"**Documents Needed:**\n" + "\n".join(f"- {doc}" for doc in state.get('documents_needed', [])) +
-                     f"\n\n**Task ID:** {task_id}\n"
-                     f"**Node:** {node}\n"
-                     f"**Session:** {run_id}",
-            
-            "renewal": f"**Renewal Paused - Waiting for Underwriter Review**\n\n"
-                      f"The renewal for policy #{state.get('policy_id', 'Unknown')} needs underwriter review.\n\n"
-                      f"**Risk Score:** {state.get('risk_score', 'N/A')}\n"
-                      f"**Risk Level:** {state.get('risk_level', 'N/A')}\n"
-                      f"**Risk Factors:** {', '.join(state.get('risk_factors', ['None']))}\n\n"
-                      f"**Task ID:** {task_id}\n"
+                      f"The appeal for claim #{state.get('claim_id', 'Unknown')} is waiting for you to upload documents.\n\n"
+                      f"**Documents Needed:**\n" + "\n".join(f"- {doc}" for doc in state.get('documents_needed', [])) +
+                      f"\n\n**Task ID:** {task_id}\n"
                       f"**Node:** {node}\n"
                       f"**Session:** {run_id}",
-            
+
+            "renewal": f"**Renewal Paused - Waiting for Underwriter Review**\n\n"
+                       f"The renewal for policy #{state.get('policy_id', 'Unknown')} needs underwriter review.\n\n"
+                       f"**Risk Score:** {state.get('risk_score', 'N/A')}\n"
+                       f"**Risk Level:** {state.get('risk_level', 'N/A')}\n"
+                       f"**Risk Factors:** {', '.join(state.get('risk_factors', ['None']))}\n\n"
+                       f"**Task ID:** {task_id}\n"
+                       f"**Node:** {node}\n"
+                       f"**Session:** {run_id}",
+
             "fraud": f"**Fraud Investigation Paused - Waiting for Review**\n\n"
-                    f"The fraud investigation for claim #{state.get('claim_id', 'Unknown')} needs review.\n\n"
-                    f"**Review Level:** {state.get('review_level', 'Unknown')}\n"
-                    f"**Fraud Risk:** {state.get('fraud_risk', 'Unknown')}\n"
-                    f"**Investigation Score:** {state.get('investigation_score', 'N/A')}\n\n"
-                    f"**Task ID:** {task_id}\n"
-                    f"**Node:** {node}\n"
-                    f"**Session:** {run_id}"
+                     f"The fraud investigation for claim #{state.get('claim_id', 'Unknown')} needs review.\n\n"
+                     f"**Review Level:** {state.get('review_level', 'Unknown')}\n"
+                     f"**Fraud Risk:** {state.get('fraud_risk', 'Unknown')}\n"
+                     f"**Investigation Score:** {state.get('investigation_score', 'N/A')}\n\n"
+                     f"**Task ID:** {task_id}\n"
+                     f"**Node:** {node}\n"
+                     f"**Session:** {run_id}"
         }
-        
+
         return {
             "reply": messages.get(agent_type, f"Graph paused at {node}"),
             "session_id": run_id,
             "paused": True,
             "task_id": task_id
         }
-    
+
     # COMPLETED
     elif status == "completed":
         messages = {
             "appeal": f"**Appeal Completed!**\n\n"
-                     f"**Claim ID:** {state.get('claim_id', 'Unknown')}\n"
-                     f"**Appeal Status:** {state.get('appeal_status', 'Unknown')}\n"
-                     f"**Strategy:** {state.get('strategy', 'Unknown')}\n"
-                     f"**Steps:** {', '.join(state.get('appeal_steps', []))}\n\n"
-                     f"**Session:** {run_id}",
-            
-            "renewal": f"**Renewal Completed!**\n\n"
-                      f"**Policy ID:** {state.get('policy_id', 'Unknown')}\n"
-                      f"**Policy Number:** {state.get('policy_number', 'Unknown')}\n"
-                      f"**Renewal Status:** {state.get('renewal_status', 'Unknown')}\n"
-                      f"**Risk Score:** {state.get('risk_score', 'N/A')}\n"
-                      f"**Steps:** {', '.join(state.get('renewal_steps', []))}\n\n"
+                      f"**Claim ID:** {state.get('claim_id', 'Unknown')}\n"
+                      f"**Appeal Status:** {state.get('appeal_status', 'Unknown')}\n"
+                      f"**Strategy:** {state.get('strategy', 'Unknown')}\n"
+                      f"**Steps:** {', '.join(state.get('appeal_steps', []))}\n\n"
                       f"**Session:** {run_id}",
-            
+
+            "renewal": f"**Renewal Completed!**\n\n"
+                       f"**Policy ID:** {state.get('policy_id', 'Unknown')}\n"
+                       f"**Policy Number:** {state.get('policy_number', 'Unknown')}\n"
+                       f"**Renewal Status:** {state.get('renewal_status', 'Unknown')}\n"
+                       f"**Risk Score:** {state.get('risk_score', 'N/A')}\n"
+                       f"**Steps:** {', '.join(state.get('renewal_steps', []))}\n\n"
+                       f"**Session:** {run_id}",
+
             "fraud": f"**Fraud Investigation Completed!**\n\n"
-                    f"**Claim ID:** {state.get('claim_id', 'Unknown')}\n"
-                    f"**Fraud Status:** {state.get('fraud_status', 'Unknown')}\n"
-                    f"**Fraud Risk:** {state.get('fraud_risk', 'Unknown')}\n"
-                    f"**Steps:** {', '.join(state.get('fraud_steps', []))}\n\n"
-                    f"**Session:** {run_id}"
+                     f"**Claim ID:** {state.get('claim_id', 'Unknown')}\n"
+                     f"**Fraud Status:** {state.get('fraud_status', 'Unknown')}\n"
+                     f"**Fraud Risk:** {state.get('fraud_risk', 'Unknown')}\n"
+                     f"**Steps:** {', '.join(state.get('fraud_steps', []))}\n\n"
+                     f"**Session:** {run_id}"
         }
-        
+
         return {
             "reply": messages.get(agent_type, f"Graph completed"),
             "session_id": run_id,
             "completed": True
         }
-    
+
     # FAILED
     elif status == "failed":
         ticket_id = result.get("ticket_id")
         error = result.get("error", "Unknown error")
-        
+
         return {
             "reply": f"**Graph Failed**\n\n"
-                    f"**Error:** {error}\n"
-                    f"**Ticket ID:** {ticket_id}\n"
-                    f"**Node:** {result.get('node', 'Unknown')}\n\n"
-                    f"An admin has been notified and will investigate.\n"
-                    f"**Session:** {run_id}",
+                     f"**Error:** {error}\n"
+                     f"**Ticket ID:** {ticket_id}\n"
+                     f"**Node:** {result.get('node', 'Unknown')}\n\n"
+                     f"An admin has been notified and will investigate.\n"
+                     f"**Session:** {run_id}",
             "session_id": run_id,
             "failed": True,
             "ticket_id": ticket_id
         }
-    
+
     # REJECTED (HITL rejection)
     elif status == "rejected":
         return {
             "reply": f"**Request Rejected**\n\n"
-                    f"Your request was rejected by the administrator.\n"
-                    f"**Reason:** {state.get('final_status', 'No reason provided')}\n"
-                    f"**Session:** {run_id}",
+                     f"Your request was rejected by the administrator.\n"
+                     f"**Reason:** {state.get('final_status', 'No reason provided')}\n"
+                     f"**Session:** {run_id}",
             "session_id": run_id,
             "rejected": True
         }
-    
+
     # Default
     else:
         return {
@@ -354,7 +407,9 @@ async def list_agents():
     # Get tools for each agent from database
     for agent in agents:
         try:
-            tools = get_tools_for_agent(agent["name"], enabled_only=True)
+            print(f"[DEBUG] Looking for tools for agent '{agent['id']}'")
+            tools = get_tools_for_agent(agent["id"], enabled_only=True)
+            print(f"[DEBUG] Found tools: {tools}")
             agent["tools"] = [t["tool_name"] for t in tools]
         except:
             agent["tools"] = []
@@ -366,22 +421,15 @@ async def list_agents():
 async def chat(request: ChatRequest):
     """
     Chat endpoint - routes to the appropriate agent.
-    
+
     Now uses REAL state graph execution instead of mocks.
     """
     # First, check if agent has tools enabled (for MCP tools)
     tools = get_tools_for_agent(request.agent, enabled_only=True)
-    
-    # Map agent IDs to names for tool checking
-    agent_name_map = {
-        "appeal": "Appeal Agent",
-        "renewal": "Renewal Agent", 
-        "fraud": "Fraud Agent",
-    }
-    
-    agent_display_name = agent_name_map.get(request.agent, request.agent)
-    tools_check = get_tools_for_agent(agent_display_name, enabled_only=True)
-    
+
+
+    tools_check = get_tools_for_agent(request.agent, enabled_only=True)
+
     # Only check tools for state_graph agents that need MCP tools
     if request.agent in ["appeal", "renewal", "fraud"] and not tools_check:
         return ChatResponse(
@@ -391,14 +439,13 @@ async def chat(request: ChatRequest):
             agent=request.agent
         )
 
-    
     # Execute the state graph
     result = await execute_graph(
         agent=request.agent,
         message=request.message,
         session_id=request.session_id
     )
-    
+
     return ChatResponse(
         reply=result.get("reply", "No response from agent"),
         agent=request.agent,
@@ -421,36 +468,36 @@ async def resume_hitl_task(task_id: int, resolution: HITLResolution):
         task = get_hitl_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        
+
         graph_name = task.get("graph_name")
         run_id = task.get("run_id")
-        
+
         # Determine which graph to resume
         graph_map = {
             "appeal_graph": AppealGraph,
             "renewal_graph": RenewalGraph,
             "fraud_graph": FraudGraph,
         }
-        
+
         graph_class = graph_map.get(graph_name)
         if not graph_class:
             return APIResponse(
                 status="error",
                 error=f"Unknown graph: {graph_name}"
             )
-        
+
         # Create graph instance and resume
         agent_name = graph_name.replace("_graph", "")
         graph = graph_class(agent_name=agent_name)
-        
+
         # Set the run_id
         graph.run_id = run_id
-        
+
         # Resume with the admin's decision
         result = await graph.resume(
             decision=resolution.decision
         )
-        
+
         return APIResponse(
             status="success",
             data={
@@ -459,7 +506,7 @@ async def resume_hitl_task(task_id: int, resolution: HITLResolution):
                 "result": result
             }
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -616,18 +663,64 @@ async def get_hitl_task_detail(task_id: int):
 
 @app.post("/api/admin/hitl/{task_id}/resolve")
 async def resolve_hitl_endpoint(task_id: int, resolution: HITLResolution):
-    """Resolve a HITL task."""
+    """
+    Resolve a HITL task AND resume the graph.
+    This is the complete fix for HITL continuation.
+    """
     try:
+        # 1. Get the task
+        task = get_hitl_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        graph_name = task.get("graph_name")
+        run_id = task.get("run_id")
+
+        # 2. Resolve the HITL task in database
         result = resolve_hitl_task(
             task_id,
             resolution.decision,
             resolution.status,
             resolution.notes
         )
-        return APIResponse(status="success", data=result)
+
+        # 3. Determine which graph to resume
+        graph_map = {
+            "appeal_graph": AppealGraph,
+            "renewal_graph": RenewalGraph,
+            "fraud_graph": FraudGraph,
+        }
+
+        graph_class = graph_map.get(graph_name)
+        if not graph_class:
+            return APIResponse(
+                status="error",
+                error=f"Unknown graph: {graph_name}"
+            )
+
+        # 4. Resume the graph
+        agent_name = graph_name.replace("_graph", "")
+        graph = graph_class(agent_name=agent_name)
+        graph.run_id = run_id
+
+        resume_result = await graph.resume(
+            decision=resolution.decision
+        )
+
+        return APIResponse(
+            status="success",
+            data={
+                "task": result,
+                "graph": graph_name,
+                "run_id": run_id,
+                "resume_result": resume_result
+            }
+        )
+
+    except HTTPException:
+        raise
     except Exception as e:
         return APIResponse(status="error", error=str(e))
-
 
 @app.post("/api/hitl")  # Called by state graphs
 async def create_hitl_task_endpoint(data: HITLTaskCreate):
@@ -676,10 +769,61 @@ async def get_ticket_detail(ticket_id: int):
 
 @app.post("/api/admin/tickets/{ticket_id}/resolve")
 async def resolve_ticket_endpoint(ticket_id: int, resolution: TicketResolution):
-    """Resolve a ticket."""
+    """Resolve a ticket. Note: this only updates the ticket record — it does
+    NOT resume the underlying graph run. Call /resume for that."""
     try:
         result = resolve_ticket(ticket_id, resolution.status, resolution.resolution_notes)
         return APIResponse(status="success", data=result)
+    except Exception as e:
+        return APIResponse(status="error", error=str(e))
+
+
+@app.post("/api/admin/tickets/{ticket_id}/resume")
+async def resume_ticket_task(ticket_id: int, resolution: TicketResolution):
+    """
+    Resolve a ticket AND resume the graph run from its last checkpoint.
+    This is the ticket-recovery equivalent of /api/admin/hitl/{task_id}/resume.
+    """
+    try:
+        ticket = get_ticket(ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+
+        graph_name = ticket.get("graph_name")
+        run_id = ticket.get("run_id")
+
+        graph_map = {
+            "appeal_graph": AppealGraph,
+            "renewal_graph": RenewalGraph,
+            "fraud_graph": FraudGraph,
+        }
+
+        graph_class = graph_map.get(graph_name)
+        if not graph_class:
+            return APIResponse(status="error", error=f"Unknown graph: {graph_name}")
+
+        # Mark the ticket resolved first
+        resolve_ticket(ticket_id, resolution.status, resolution.resolution_notes)
+
+        # Then resume the graph from its checkpoint
+        agent_name = graph_name.replace("_graph", "")
+        graph = graph_class(agent_name=agent_name)
+        graph.run_id = run_id
+
+        result = await graph.resume(decision={"notes": resolution.resolution_notes})
+
+        return APIResponse(
+            status="success",
+            data={
+                "graph": graph_name,
+                "run_id": run_id,
+                "ticket_id": ticket_id,
+                "result": result
+            }
+        )
+
+    except HTTPException:
+        raise
     except Exception as e:
         return APIResponse(status="error", error=str(e))
 
@@ -757,4 +901,5 @@ async def get_checkpoint_endpoint(graph_name: str, run_id: str, node_name: str):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
